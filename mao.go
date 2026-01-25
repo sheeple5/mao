@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"regexp"
+	"slices"
 )
+
+type Rules func(card *Card, deck *Deck) string
 
 type Card struct {
 	Rank  string
@@ -15,6 +18,12 @@ type Card struct {
 type Deck struct {
 	Pile        []*Card
 	DiscardPile []*Card
+}
+
+func shuffleCards(pile []*Card) {
+	rand.Shuffle(len(pile), func(i, j int) {
+		pile[i], pile[j] = pile[j], pile[i]
+	})
 }
 
 func initializeDeck() Deck {
@@ -28,9 +37,7 @@ func initializeDeck() Deck {
 	}
 
 	// Shuffle cards
-	rand.Shuffle(len(pile), func(i, j int) {
-		pile[i], pile[j] = pile[j], pile[i]
-	})
+	shuffleCards(pile)
 
 	// Start discard pile
 	discardPile := []*Card{pile[0]}
@@ -84,6 +91,12 @@ type Hand struct {
 }
 
 func (hand *Hand) drawCard(deck *Deck) {
+	if len(deck.Pile) == 0 {
+		deck.Pile = deck.DiscardPile[:len(deck.DiscardPile)-1]
+		shuffleCards(deck.Pile)
+		deck.DiscardPile = deck.DiscardPile[len(deck.DiscardPile)-1:]
+	}
+
 	drawnCard := deck.Pile[0]
 	hand.Cards = append(hand.Cards, drawnCard)
 	deck.Pile = deck.Pile[1:]
@@ -94,13 +107,15 @@ func (hand *Hand) drawHand(deck *Deck) {
 	deck.Pile = deck.Pile[7:]
 }
 
-func (hand *Hand) playCard(handPosition int, card *Card, deck *Deck) {
-	deck.DiscardPile = append(deck.DiscardPile, card)
-	hand.Cards = append(hand.Cards[:handPosition], hand.Cards[handPosition+1:]...)
+func (hand *Hand) playCard(handPosition int, deck *Deck) {
+	deck.DiscardPile = append(deck.DiscardPile, hand.Cards[handPosition])
+	appended := append(hand.Cards[:handPosition], hand.Cards[handPosition+1:]...)
+	hand.Cards = appended
 }
 
-func (hand *Hand) playTurn(deck *Deck) {
-	deck.printPile("discardPile")
+func (hand *Hand) playTurn(deck *Deck, rules []Rules) {
+	// deck.printPile("discardPile")
+	deck.printDeck()
 	deck.printCurrentTop()
 	hand.printHand()
 
@@ -121,7 +136,7 @@ func (hand *Hand) playTurn(deck *Deck) {
 			// If player chose to draw, pulls a card from the top of the deck and ends turn
 			if choice == "draw" {
 				hand.drawCard(deck)
-				return
+				break
 			}
 
 			// If player chose to play a card, validates that the card is actually in hand
@@ -136,8 +151,24 @@ func (hand *Hand) playTurn(deck *Deck) {
 			}
 
 			if playedCard != nil {
-				if baseRule(playedCard, deck) {
-					hand.playCard(handPosition, playedCard, deck)
+				failedRule := false
+				for _, rule := range rules {
+					ruleResult := rule(playedCard, deck)
+
+					if ruleResult == "true" {
+						break
+					} else if ruleResult == "false" {
+						failedRule = true
+						break
+					} else if ruleResult == "continue" {
+						continue
+					} else {
+						continue
+					}
+				}
+
+				if !failedRule {
+					hand.playCard(handPosition, deck)
 					break
 				} else {
 					fmt.Println("Broke a rule, incur a penalty.\n")
@@ -166,26 +197,72 @@ func (hand Hand) printHand() {
 	}
 }
 
-func baseRule(card *Card, deck *Deck) bool {
+// The base "UNO" rule
+func baseRule(card *Card, deck *Deck) string {
 	currentCard := deck.getCurrentTop()
 
 	if card.Rank == currentCard.Rank {
-		return true
+		return "true"
 	} else if card.Suit == currentCard.Suit {
-		return true
+		return "true"
 	} else {
-		return false
+		return "false"
+	}
+}
+
+// Test rule: You can play any face card with no penalty
+func testRule(card *Card, deck *Deck) string {
+	if slices.Contains([]string{"K", "Q", "J"}, card.Rank) {
+		return "true"
+	} else {
+		return "continue"
+	}
+}
+
+// Test rule 2: takes precedent over all face cards work rule in that the Jack of Spades is an auto penalty
+func testRule2(card *Card, deck *Deck) string {
+	if card.Value == "JS" {
+		return "false"
+	} else {
+		return "continue"
 	}
 }
 
 func main() {
+	// Initialize deck and hand
 	deck := initializeDeck()
 	hand := Hand{}
 	hand.drawHand(&deck)
+	hand2 := Hand{}
+	hand2.drawHand(&deck)
 
-	deck.printDeck()
+	// Base Rules array:
+	// Have to do with rules regarding how played cards interact with the deck
+	// Rules should be appended at index 0 so they run first in the loop.
+	// New rules take priority over later rules.
+	// Rules should be able to return three states: true, continue, and false
+	//  - if true, auto succeed and skip remaining rules in the stack
+	//  - if false, auto fail and skip remaining rules in the stack
+	//  - if conitnue, move to next rule in stack
+	rules := []Rules{testRule2, testRule, baseRule}
 
-	hand.playTurn(&deck)
-	deck.printDeck()
-	hand.printHand()
+	// Need to figure out how to implement rules of other categories:
+	// 1) Rules around user input (adjust regex. i.e. can say "autoplay" once and play any card. would need a base rule generated too to compensate)
+	//  - would also have to somehow update hand state to track if autoplay has been used
+	// 2) Rules that allow multiple cards to be played (i.e. can play multiple cards if they have the same rank.)
+	// 3 ) Rules that change the win condition (i.e. anyone who plays the ace of spades wins)
+
+	for {
+		hand.playTurn(&deck, rules)
+		if len(hand.Cards) == 0 {
+			fmt.Println("Player 1 has won!")
+			break
+		}
+
+		hand2.playTurn(&deck, rules)
+		if len(hand2.Cards) == 0 {
+			fmt.Println("Player 2 has won!")
+			break
+		}
+	}
 }
