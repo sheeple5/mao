@@ -5,10 +5,22 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 )
+
+type Player struct {
+	id           string
+	canStartGame bool
+}
+
+type Room struct {
+	players   map[string]Player
+	isStarted bool
+}
 
 type Card struct {
 	Rank  string
@@ -100,6 +112,7 @@ func (deck *Deck) drawHand() []string {
 func main() {
 	// Create deck
 	deck := initializeDeck()
+	room := Room{isStarted: false, players: make(map[string]Player)}
 
 	l, err := net.Listen("tcp", ":9090")
 	if err != nil {
@@ -115,11 +128,11 @@ func main() {
 			panic(err)
 		}
 
-		go handleConnection(conn, &deck)
+		go handleConnection(conn, &deck, &room)
 	}
 }
 
-func handleConnection(conn net.Conn, deck *Deck) {
+func handleConnection(conn net.Conn, deck *Deck, room *Room) {
 	defer conn.Close()
 
 	netData, err := bufio.NewReader(conn).ReadString('\n')
@@ -136,9 +149,42 @@ func handleConnection(conn net.Conn, deck *Deck) {
 		// Need to do a check if the game state has started or not. If yes, give player UUID and stuff. If no, return a can't join error
 		// - OR Have a client send a create room message? And then that player controls the room?
 		// Also need to check if any players have joined. If no, canStartGame is returned true. Else, false
-		newPlayerUUID := uuid.NewString()
-		conn.Write([]byte(fmt.Sprintf("{'joined': 'true', 'playerID': '%s', 'canStartGame', 'true'}", newPlayerUUID)))
+		newPlayer := Player{id: uuid.NewString()}
+
+		if len(room.players) == 0 {
+			newPlayer.canStartGame = true
+		} else {
+			newPlayer.canStartGame = false
+		}
+
+		room.players[newPlayer.id] = newPlayer
+		conn.Write([]byte(fmt.Sprintf("{'joined': 'true', 'playerID': '%s', 'canStartGame', '%s'}", newPlayer.id, strconv.FormatBool(newPlayer.canStartGame))))
 		return
+	} else if netData == "{'waiting': 'true'}" {
+		for {
+			if room.isStarted {
+				conn.Write([]byte("{'gameStarted': 'true'}"))
+				return
+			}
+		}
+	} else if ok, _ := regexp.MatchString("\\{'playerID': '[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}', 'startGame': 'true'\\}", netData); ok {
+		re := regexp.MustCompile("\\{'playerID': '([a-f0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})', 'startGame': 'true'\\}")
+		receivedID := re.FindStringSubmatch(netData)[1]
+
+		// Checks to see if a real player's UUID was received
+		if _, ok := room.players[receivedID]; !ok {
+			conn.Write([]byte("{'gameStarted': 'false', 'message': 'Did not receive a valid UUID'}"))
+			return
+		}
+
+		if room.players[receivedID].canStartGame {
+			room.isStarted = true
+			conn.Write([]byte("{'gameStarted': 'true'}"))
+			return
+		} else {
+			conn.Write([]byte("{'gameStarted': 'false', 'message': 'Only first player can start the game'}"))
+			return
+		}
 	}
 
 	fmt.Printf("Received message: %s\n", netData)
