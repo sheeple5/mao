@@ -158,12 +158,12 @@ func handleConnection(conn net.Conn, deck *Deck, room *Room) {
 		}
 
 		room.players[newPlayer.id] = newPlayer
-		conn.Write([]byte(fmt.Sprintf("{'joined': 'true', 'playerID': '%s', 'canStartGame', '%s'}", newPlayer.id, strconv.FormatBool(newPlayer.canStartGame))))
+		conn.Write([]byte(fmt.Sprintf("{'joined': 'true', 'playerID': '%s', 'canStartGame', '%s'}\n", newPlayer.id, strconv.FormatBool(newPlayer.canStartGame))))
 		return
 	} else if netData == "{'waiting': 'true'}" {
 		for {
 			if room.isStarted {
-				conn.Write([]byte("{'gameStarted': 'true'}"))
+				conn.Write([]byte("{'gameStarted': 'true'}\n"))
 				return
 			}
 		}
@@ -173,20 +173,20 @@ func handleConnection(conn net.Conn, deck *Deck, room *Room) {
 
 		// Checks to see if a real player's UUID was received
 		if _, ok := room.players[receivedID]; !ok {
-			conn.Write([]byte("{'gameStarted': 'false', 'message': 'Did not receive a valid UUID'}"))
+			conn.Write([]byte("{'gameStarted': 'false', 'message': 'Did not receive a valid UUID'}\n"))
 			return
 		}
 
 		if room.players[receivedID].canStartGame {
 			room.isStarted = true
-			conn.Write([]byte("{'gameStarted': 'true'}"))
+			conn.Write([]byte("{'gameStarted': 'true'}\n"))
 			return
 		} else {
-			conn.Write([]byte("{'gameStarted': 'false', 'message': 'Only first player can start the game'}"))
+			conn.Write([]byte("{'gameStarted': 'false', 'message': 'Only first player can start the game'}\n"))
 			return
 		}
 	}
 
 	fmt.Printf("Received message: %s\n", netData)
-	conn.Write([]byte("Message received: " + netData))
+	conn.Write([]byte(fmt.Sprintf("Message received: %s\n", netData)))
 }
