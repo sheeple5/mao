@@ -14,7 +14,9 @@ import (
 
 type Player struct {
 	PlayerID     string
+	PlayerNumber int
 	CanStartGame bool
+	IsTurn       bool
 }
 
 type Room struct {
@@ -113,6 +115,7 @@ func main() {
 	// Create deck
 	deck := initializeDeck()
 	room := Room{IsStarted: false, Players: make(map[string]Player)}
+	drawTurn := 0
 
 	l, err := net.Listen("tcp", ":9090")
 	if err != nil {
@@ -128,11 +131,11 @@ func main() {
 			panic(err)
 		}
 
-		go handleConnection(conn, &deck, &room)
+		go handleConnection(conn, &deck, &room, &drawTurn)
 	}
 }
 
-func handleConnection(conn net.Conn, deck *Deck, room *Room) {
+func handleConnection(conn net.Conn, deck *Deck, room *Room, drawTurn *int) {
 	defer conn.Close()
 
 	netData, err := bufio.NewReader(conn).ReadString('\n')
@@ -152,15 +155,19 @@ func handleConnection(conn net.Conn, deck *Deck, room *Room) {
 		newPlayer := Player{PlayerID: uuid.NewString()}
 
 		if len(room.Players) == 0 {
+			newPlayer.PlayerNumber = 0
 			newPlayer.CanStartGame = true
+			newPlayer.IsTurn = true
 		} else {
+			newPlayer.PlayerNumber = len(room.Players)
 			newPlayer.CanStartGame = false
+			newPlayer.IsTurn = false
 		}
 
 		room.Players[newPlayer.PlayerID] = newPlayer
-		conn.Write([]byte(fmt.Sprintf("{\"playerID\": \"%s\", \"canStartGame\": %s}\n", newPlayer.PlayerID, strconv.FormatBool(newPlayer.CanStartGame))))
+		conn.Write([]byte(fmt.Sprintf("{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s, \"isTurn\": %s}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame), strconv.FormatBool(newPlayer.IsTurn))))
 		return
-	} else if netData == "{\"action\": \"waiting\"}" {
+	} else if netData == "{\"action\": \"waitingStart\"}" {
 		for {
 			if room.IsStarted {
 				conn.Write([]byte("{\"gameStarted\": \"true\"}\n"))
@@ -184,6 +191,18 @@ func handleConnection(conn net.Conn, deck *Deck, room *Room) {
 		} else {
 			conn.Write([]byte("{\"gameStarted\": \"false\", \"message\": \"Only first player can start the game\"}\n"))
 			return
+		}
+	} else if ok, _ := regexp.MatchString("\\{\"playerID\": \"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\", \"action\": \"drawHand\"\\}", netData); ok {
+		re := regexp.MustCompile("\\{\"playerID\": \"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\", \"action\": \"drawHand\"\\}")
+		receivedID := re.FindStringSubmatch(netData)[1]
+		player := room.Players[receivedID]
+
+		for {
+			if player.PlayerNumber == *drawTurn {
+				conn.Write([]byte(fmt.Sprintf("%s\n", strings.Join(deck.drawHand(), ","))))
+				*drawTurn += 1
+				return
+			}
 		}
 	}
 

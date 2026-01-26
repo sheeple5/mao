@@ -11,7 +11,9 @@ import (
 
 type Player struct {
 	PlayerID     string
+	PlayerNumber int
 	CanStartGame bool
+	IsTurn       bool
 }
 
 func getPlayer(player *Player) {
@@ -85,7 +87,32 @@ func waitForGameStart() {
 	defer conn.Close()
 
 	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString("{\"action\": \"waiting\"}\n")
+	_, err = writer.WriteString("{\"action\": \"waitingStart\"}\n")
+	if err != nil {
+		panic(err)
+	}
+
+	err = writer.Flush()
+	if err != nil {
+		panic(err)
+	}
+
+	netData, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(netData)
+}
+
+func drawHand(player *Player) {
+	conn, err := net.Dial("tcp", "localhost:9090")
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	writer := bufio.NewWriter(conn)
+	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"action\": \"drawHand\"}\n", player.PlayerID))
 	if err != nil {
 		panic(err)
 	}
@@ -124,6 +151,9 @@ func main() {
 			fmt.Println("Waiting for game to start...")
 			waitForGameStart()
 		}
+
+		drawHand(&player)
+
 	} else {
 		fmt.Println("Goodbye")
 	}
