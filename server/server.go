@@ -13,15 +13,18 @@ import (
 )
 
 type Player struct {
+	Hand         Hand
 	PlayerID     string
 	PlayerNumber int
 	CanStartGame bool
-	IsTurn       bool
 }
 
 type Room struct {
-	Players   map[string]Player
-	IsStarted bool
+	Players    map[string]Player
+	Deck       Deck
+	IsStarted  bool
+	DrawTurn   int
+	PlayerTurn int
 }
 
 type Card struct {
@@ -33,6 +36,15 @@ type Card struct {
 type Deck struct {
 	Pile        []*Card
 	DiscardPile []*Card
+}
+
+type Hand struct {
+	Cards []*Card
+}
+
+func (player *Player) drawHand(room *Room) {
+	player.Hand.Cards = room.Deck.Pile[:7]
+	room.Deck.Pile = room.Deck.Pile[7:]
 }
 
 func shuffleCards(pile []*Card) {
@@ -113,9 +125,7 @@ func (deck *Deck) drawHand() []string {
 
 func main() {
 	// Create deck
-	deck := initializeDeck()
-	room := Room{IsStarted: false, Players: make(map[string]Player)}
-	drawTurn := 0
+	room := Room{Deck: initializeDeck(), IsStarted: false, Players: make(map[string]Player)}
 
 	l, err := net.Listen("tcp", ":9090")
 	if err != nil {
@@ -124,18 +134,18 @@ func main() {
 	defer l.Close()
 	fmt.Println("Listening on all interfaces on port 9090")
 
-	deck.printDeck()
+	room.Deck.printDeck()
 	for {
 		conn, err := l.Accept()
 		if err != nil {
 			panic(err)
 		}
 
-		go handleConnection(conn, &deck, &room, &drawTurn)
+		go handleConnection(conn, &room)
 	}
 }
 
-func handleConnection(conn net.Conn, deck *Deck, room *Room, drawTurn *int) {
+func handleConnection(conn net.Conn, room *Room) {
 	defer conn.Close()
 
 	netData, err := bufio.NewReader(conn).ReadString('\n')
@@ -144,11 +154,7 @@ func handleConnection(conn net.Conn, deck *Deck, room *Room, drawTurn *int) {
 	}
 
 	netData = strings.TrimSpace(netData)
-	if netData == "{\"action\": \"drawHand\"}" {
-		conn.Write([]byte(strings.Join(deck.drawHand(), ",")))
-		deck.printDeck()
-		return
-	} else if netData == "{\"joinGame\": \"ABCD\"}" {
+	if netData == "{\"joinGame\": \"ABCD\"}" {
 		// Need to do a check if the game state has started or not. If yes, give player UUID and stuff. If no, return a can't join error
 		// - OR Have a client send a create room message? And then that player controls the room?
 		// Also need to check if any players have joined. If no, canStartGame is returned true. Else, false
@@ -157,20 +163,25 @@ func handleConnection(conn net.Conn, deck *Deck, room *Room, drawTurn *int) {
 		if len(room.Players) == 0 {
 			newPlayer.PlayerNumber = 0
 			newPlayer.CanStartGame = true
-			newPlayer.IsTurn = true
 		} else {
 			newPlayer.PlayerNumber = len(room.Players)
 			newPlayer.CanStartGame = false
-			newPlayer.IsTurn = false
 		}
+		newPlayer.drawHand(room)
 
 		room.Players[newPlayer.PlayerID] = newPlayer
-		conn.Write([]byte(fmt.Sprintf("{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s, \"isTurn\": %s}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame), strconv.FormatBool(newPlayer.IsTurn))))
+		conn.Write([]byte(fmt.Sprintf("{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame))))
 		return
-	} else if netData == "{\"action\": \"waitingStart\"}" {
+	} else if ok, _ := regexp.MatchString("\\{\"playerID\": \"[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}\", \"action\": \"waitingStart\"\\}", netData); ok {
+		re := regexp.MustCompile("\\{\"playerID\": \"([a-f0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})\", \"action\": \"waitingStart\"\\}")
+		receivedID := re.FindStringSubmatch(netData)[1]
 		for {
 			if room.IsStarted {
-				conn.Write([]byte("{\"gameStarted\": \"true\"}\n"))
+				cardValues := []string{}
+				for _, card := range room.Players[receivedID].Hand.Cards {
+					cardValues = append(cardValues, card.Value)
+				}
+				conn.Write([]byte(fmt.Sprintf("{\"initialHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
 				return
 			}
 		}
@@ -186,7 +197,11 @@ func handleConnection(conn net.Conn, deck *Deck, room *Room, drawTurn *int) {
 
 		if room.Players[receivedID].CanStartGame {
 			room.IsStarted = true
-			conn.Write([]byte("{\"gameStarted\": \"true\"}\n"))
+			cardValues := []string{}
+			for _, card := range room.Players[receivedID].Hand.Cards {
+				cardValues = append(cardValues, card.Value)
+			}
+			conn.Write([]byte(fmt.Sprintf("{\"initialHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
 			return
 		} else {
 			conn.Write([]byte("{\"gameStarted\": \"false\", \"message\": \"Only first player can start the game\"}\n"))
@@ -198,12 +213,15 @@ func handleConnection(conn net.Conn, deck *Deck, room *Room, drawTurn *int) {
 		player := room.Players[receivedID]
 
 		for {
-			if player.PlayerNumber == *drawTurn {
-				conn.Write([]byte(fmt.Sprintf("%s\n", strings.Join(deck.drawHand(), ","))))
-				*drawTurn += 1
+			if player.PlayerNumber == room.DrawTurn {
+				conn.Write([]byte(fmt.Sprintf("{\"cards\": \"%s\"}\n", strings.Join(room.Deck.drawHand(), ","))))
+				room.DrawTurn += 1
 				return
 			}
 		}
+	} else if netData == "{\"action\": \"requestTurn\"}" {
+		conn.Write([]byte(fmt.Sprintf("{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().Value)))
+		return
 	}
 
 	fmt.Printf("Received message: %s\n", netData)
