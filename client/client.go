@@ -229,6 +229,31 @@ func requestTurn() []string {
 	return []string{strconv.Itoa(requestTurnDetails.PlayerNumber), requestTurnDetails.TopCard}
 }
 
+func waitTurn() {
+	conn, err := net.Dial("tcp", "localhost:9090")
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	writer := bufio.NewWriter(conn)
+	_, err = writer.WriteString("{\"action\": \"waitTurn\"}\n")
+	if err != nil {
+		panic(err)
+	}
+
+	err = writer.Flush()
+	if err != nil {
+		panic(err)
+	}
+
+	netData, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(netData)
+}
+
 func main() {
 	var player Player
 	var handList string
@@ -286,21 +311,22 @@ func main() {
 						if playSucceeded {
 							fmt.Println("VALID")
 							fmt.Println(currentHand)
+							handList = currentHand
 						} else {
 							fmt.Println("INVALID")
 							fmt.Println(currentHand)
+							handList = currentHand
 						}
 					}
 				}
 				// send card to play. can validate user actually has card on server side now cause it's handled over there
 				// once card has actually been played and is valid, respond back with new handlist for next turn
-				break
 			} else {
 				fmt.Printf("Player %d's turn...\n", adjustedTurnPlayerNumber)
 				fmt.Printf("Current Card: %s\n", turnTopCard)
 				fmt.Printf("My Hand: %s\n", handList)
 				fmt.Println("Waiting for turn...")
-				break
+				waitTurn()
 			}
 
 			// request turn

@@ -8,9 +8,55 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 )
+
+type Rules func(card Card, deck Deck) string
+
+// The base "UNO" rule
+func baseRule(card Card, deck Deck) string {
+	currentCard := deck.getCurrentTop()
+
+	if card.Rank == currentCard.Rank {
+		return "true"
+	} else if card.Suit == currentCard.Suit {
+		return "true"
+	} else {
+		return "false"
+	}
+}
+
+func rulesCheck(player Player, playedCard string, room Room) bool {
+	// Check if card is actually in hand
+	foundCard := false
+	for _, card := range player.Hand.Cards {
+		if playedCard == card.Value {
+			foundCard = true
+			break
+		}
+	}
+	if !foundCard {
+		return false
+	}
+
+	card := convertCard(playedCard)
+	for _, rule := range room.Rules {
+		ruleResult := rule(card, room.Deck)
+
+		if ruleResult == "true" {
+			return true
+		} else if ruleResult == "false" {
+			return false
+		} else if ruleResult == "continue" {
+			continue
+		} else {
+			continue
+		}
+	}
+	return true
+}
 
 type Player struct {
 	Hand         Hand
@@ -25,12 +71,21 @@ type Room struct {
 	IsStarted  bool
 	DrawTurn   int
 	PlayerTurn int
+	Rules      []Rules
 }
 
 type Card struct {
 	Rank  string
 	Suit  string
 	Value string
+}
+
+func convertCard(playedCard string) Card {
+	re := regexp.MustCompile("((?:[AKQJ2-9]|10))([SCHD])")
+	rank := re.FindStringSubmatch(playedCard)[1]
+	suit := re.FindStringSubmatch(playedCard)[2]
+
+	return Card{Rank: rank, Suit: suit, Value: playedCard}
 }
 
 type Deck struct {
@@ -147,9 +202,14 @@ func (deck *Deck) drawHand() []string {
 	return cardValues
 }
 
+var (
+	mu   sync.Mutex
+	cond = sync.NewCond(&mu)
+)
+
 func main() {
 	// Create deck
-	room := Room{Deck: initializeDeck(), IsStarted: false, Players: make(map[string]Player)}
+	room := Room{Deck: initializeDeck(), IsStarted: false, Players: make(map[string]Player), Rules: []Rules{baseRule}}
 
 	l, err := net.Listen("tcp", ":9090")
 	if err != nil {
@@ -249,6 +309,8 @@ func handleConnection(conn net.Conn, room *Room) {
 		playedCard := re.FindStringSubmatch(netData)[2]
 		player := room.Players[receivedID]
 
+		cond.Signal()
+		cond.L.Lock()
 		if player.PlayerNumber == room.PlayerTurn {
 			if playedCard == "draw" {
 				player.Hand.drawCard(&room.Deck)
@@ -256,33 +318,60 @@ func handleConnection(conn net.Conn, room *Room) {
 				for _, card := range player.Hand.Cards {
 					cardValues = append(cardValues, card.Value)
 				}
+				room.Players[player.PlayerID] = player
 
-				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\"}\n", cardValues)))
+				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
 				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players)
-				return
-			} else if true { // check against the rules. Need to check that card is in hand and that it passes the rules. Presumably updates the hand before response is passed
+			} else if rulesCheck(player, playedCard, *room) { // check against the rules. Need to check that card is in hand and that it passes the rules. Presumably updates the hand before response is passed
+				// Pop card
+				var popIndex int
+				for i, card := range player.Hand.Cards {
+					if card.Value == playedCard {
+						popIndex = i
+					}
+				}
+				player.Hand.printHand()
+				room.Deck.DiscardPile = append(room.Deck.DiscardPile, player.Hand.Cards[popIndex])
+				appended := append(player.Hand.Cards[:popIndex], player.Hand.Cards[popIndex+1:]...)
+				fmt.Println(appended)
+				player.Hand.Cards = appended
+				room.Players[player.PlayerID] = player
+				player.Hand.printHand()
+
+				// Convert cards to string list
 				cardValues := []string{}
-				for _, card := range room.Players[receivedID].Hand.Cards {
+				for _, card := range player.Hand.Cards {
 					cardValues = append(cardValues, card.Value)
 				}
+				player.Hand.printHand()
 
-				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\"}\n", cardValues)))
+				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
 				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players)
-				return
 			} else {
 				player.Hand.drawCard(&room.Deck)
 				cardValues := []string{} // Need to turn this into a Hand method, this is reused a lot
 				for _, card := range player.Hand.Cards {
 					cardValues = append(cardValues, card.Value)
 				}
+				room.Players[player.PlayerID] = player
 
-				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": false, \"currentHand\": \"%s\"}\n", cardValues)))
-				return
+				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": false, \"currentHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
 			}
 		}
+		cond.L.Unlock()
+		return
 	} else if netData == "{\"action\": \"requestTurn\"}" {
 		conn.Write([]byte(fmt.Sprintf("{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().Value)))
 		return
+	} else if netData == "{\"action\": \"waitTurn\"}" {
+		currentPlayer := room.PlayerTurn
+		cond.L.Lock() // Should probably convert other waiting periods to this as well, like waiting on game start
+		for currentPlayer == room.PlayerTurn {
+			fmt.Println("waiting...")
+			cond.Wait()
+		}
+		cond.L.Unlock()
+		conn.Write([]byte("{\"waiting\": \"false\"}\n"))
 	}
 
 	fmt.Printf("Received message: %s\n", netData)
