@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
 )
@@ -14,6 +16,51 @@ type Player struct {
 	PlayerID     string
 	PlayerNumber int
 	CanStartGame bool
+}
+
+func (player Player) playCard(playedCard string) []any {
+	conn, err := net.Dial("tcp", "localhost:9090")
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	writer := bufio.NewWriter(conn)
+	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"playCard\": \"%s\"}\n", player.PlayerID, playedCard))
+	if err != nil {
+		panic(err)
+	}
+
+	err = writer.Flush()
+	if err != nil {
+		panic(err)
+	}
+
+	netData, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		panic(err)
+	}
+
+	type RuleCheckResults struct {
+		RulesPassed bool
+		CurrentHand string
+	}
+	// Converts the received JSON data and converts it into a map
+	var ruleCheckResults RuleCheckResults
+	var ruleData map[string]any
+	err = json.Unmarshal([]byte(netData), &ruleData)
+	if err != nil {
+		fmt.Println(netData)
+		panic(err)
+	}
+
+	// Loads the JSON data into the player struct using mapstructure
+	err = mapstructure.Decode(ruleData, &ruleCheckResults)
+	if err != nil {
+		panic(err)
+	}
+
+	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand}
 }
 
 func getPlayer(player *Player) {
@@ -216,12 +263,35 @@ func main() {
 			adjustedTurnPlayerNumber += 1
 			// If my player number equals the returned turn player, take turn. Else, wait for turn and display current hand/top card
 			if strconv.Itoa(player.PlayerNumber) == turnPlayerNumber {
+				var playedCard string
 				fmt.Printf("Player %d's turn...\n", adjustedTurnPlayerNumber)
 				fmt.Printf("Current Card: %s\n", turnTopCard)
 				fmt.Printf("My Hand: %s\n", handList)
-				fmt.Println("My turn!")
-				// make new request to ask for hand by UUID
-				// display current top card and current hand
+
+				for {
+					fmt.Print("Choose a card to play (or 'draw' to draw): ")
+					fmt.Scan(&playedCard)
+
+					if !slices.Contains(strings.Split(handList, ", "), playedCard) && playedCard != "draw" {
+						fmt.Println("Error: The card you entered is not in hand.")
+					} else {
+						break
+					}
+				}
+
+				playResults := player.playCard(playedCard)
+
+				if currentHand, ok := playResults[1].(string); ok {
+					if playSucceeded, ok := playResults[0].(bool); ok {
+						if playSucceeded {
+							fmt.Println("VALID")
+							fmt.Println(currentHand)
+						} else {
+							fmt.Println("INVALID")
+							fmt.Println(currentHand)
+						}
+					}
+				}
 				// send card to play. can validate user actually has card on server side now cause it's handled over there
 				// once card has actually been played and is valid, respond back with new handlist for next turn
 				break

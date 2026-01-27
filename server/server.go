@@ -42,6 +42,30 @@ type Hand struct {
 	Cards []*Card
 }
 
+func (hand Hand) printHand() {
+	fmt.Println("Hand: ")
+	fmt.Println("----------------------")
+	for i, card := range hand.Cards {
+		if i != len(hand.Cards)-1 {
+			fmt.Printf("%s, ", card.Value)
+		} else {
+			fmt.Printf("%s\n\n", card.Value)
+		}
+	}
+}
+
+func (hand *Hand) drawCard(deck *Deck) {
+	if len(deck.Pile) == 0 {
+		deck.Pile = deck.DiscardPile[:len(deck.DiscardPile)-1]
+		shuffleCards(deck.Pile)
+		deck.DiscardPile = deck.DiscardPile[len(deck.DiscardPile)-1:]
+	}
+
+	drawnCard := deck.Pile[0]
+	hand.Cards = append(hand.Cards, drawnCard)
+	deck.Pile = deck.Pile[1:]
+}
+
 func (player *Player) drawHand(room *Room) {
 	player.Hand.Cards = room.Deck.Pile[:7]
 	room.Deck.Pile = room.Deck.Pile[7:]
@@ -216,6 +240,43 @@ func handleConnection(conn net.Conn, room *Room) {
 			if player.PlayerNumber == room.DrawTurn {
 				conn.Write([]byte(fmt.Sprintf("{\"cards\": \"%s\"}\n", strings.Join(room.Deck.drawHand(), ","))))
 				room.DrawTurn += 1
+				return
+			}
+		}
+	} else if ok, _ := regexp.MatchString("\\{\"playerID\": \"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\", \"playCard\": \"(?:draw|(?:[AKQJ2-9]|10)[SCHD])\"\\}", netData); ok {
+		re := regexp.MustCompile("\\{\"playerID\": \"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\", \"playCard\": \"(draw|(?:[AKQJ2-9]|10)[SCHD])\"\\}")
+		receivedID := re.FindStringSubmatch(netData)[1]
+		playedCard := re.FindStringSubmatch(netData)[2]
+		player := room.Players[receivedID]
+
+		if player.PlayerNumber == room.PlayerTurn {
+			if playedCard == "draw" {
+				player.Hand.drawCard(&room.Deck)
+				cardValues := []string{} // Need to turn this into a Hand method, this is reused a lot
+				for _, card := range player.Hand.Cards {
+					cardValues = append(cardValues, card.Value)
+				}
+
+				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\"}\n", cardValues)))
+				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players)
+				return
+			} else if true { // check against the rules. Need to check that card is in hand and that it passes the rules. Presumably updates the hand before response is passed
+				cardValues := []string{}
+				for _, card := range room.Players[receivedID].Hand.Cards {
+					cardValues = append(cardValues, card.Value)
+				}
+
+				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\"}\n", cardValues)))
+				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players)
+				return
+			} else {
+				player.Hand.drawCard(&room.Deck)
+				cardValues := []string{} // Need to turn this into a Hand method, this is reused a lot
+				for _, card := range player.Hand.Cards {
+					cardValues = append(cardValues, card.Value)
+				}
+
+				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": false, \"currentHand\": \"%s\"}\n", cardValues)))
 				return
 			}
 		}
