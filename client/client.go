@@ -44,6 +44,7 @@ func (player Player) playCard(playedCard string) []any {
 	type RuleCheckResults struct {
 		RulesPassed bool
 		CurrentHand string
+		WonGame     bool
 	}
 	// Converts the received JSON data and converts it into a map
 	var ruleCheckResults RuleCheckResults
@@ -60,7 +61,7 @@ func (player Player) playCard(playedCard string) []any {
 		panic(err)
 	}
 
-	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand}
+	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonGame}
 }
 
 func getPlayer(player *Player) {
@@ -229,7 +230,7 @@ func requestTurn() []string {
 	return []string{strconv.Itoa(requestTurnDetails.PlayerNumber), requestTurnDetails.TopCard}
 }
 
-func waitTurn() {
+func waitTurn() string {
 	conn, err := net.Dial("tcp", "localhost:9090")
 	if err != nil {
 		panic(err)
@@ -251,7 +252,30 @@ func waitTurn() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(netData)
+
+	type GameWonDetails struct {
+		WonGame       bool
+		WinningPlayer string
+	}
+	var gameWonDetails GameWonDetails
+	var gameData map[string]any
+	err = json.Unmarshal([]byte(netData), &gameData)
+	if err != nil {
+		fmt.Println(netData)
+		panic(err)
+	}
+
+	// Loads the JSON data into the drawAction struct using mapstructure
+	err = mapstructure.Decode(gameData, &gameWonDetails)
+	if err != nil {
+		panic(err)
+	}
+
+	if gameWonDetails.WonGame {
+		return gameWonDetails.WinningPlayer
+	} else {
+		return ""
+	}
 }
 
 func main() {
@@ -305,6 +329,12 @@ func main() {
 				}
 
 				playResults := player.playCard(playedCard)
+				if wonGame, ok := playResults[2].(bool); ok {
+					if wonGame {
+						fmt.Println("Congratulations, you win!")
+						break
+					}
+				}
 
 				if currentHand, ok := playResults[1].(string); ok {
 					if playSucceeded, ok := playResults[0].(bool); ok {
@@ -326,7 +356,12 @@ func main() {
 				fmt.Printf("Current Card: %s\n", turnTopCard)
 				fmt.Printf("My Hand: %s\n", handList)
 				fmt.Println("Waiting for turn...")
-				waitTurn()
+				winningPlayer := waitTurn()
+
+				if winningPlayer != "" {
+					fmt.Printf("Game over! Player %s wins.", winningPlayer)
+					break
+				}
 			}
 
 			// request turn

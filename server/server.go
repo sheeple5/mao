@@ -320,7 +320,7 @@ func handleConnection(conn net.Conn, room *Room) {
 				}
 				room.Players[player.PlayerID] = player
 
-				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
+				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", strings.Join(cardValues, ", "))))
 				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players)
 			} else if rulesCheck(player, playedCard, *room) { // check against the rules. Need to check that card is in hand and that it passes the rules. Presumably updates the hand before response is passed
 				// Pop card
@@ -345,7 +345,11 @@ func handleConnection(conn net.Conn, room *Room) {
 				}
 				player.Hand.printHand()
 
-				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
+				if len(player.Hand.Cards) > 0 {
+					conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", strings.Join(cardValues, ", "))))
+				} else {
+					conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": true}\n", strings.Join(cardValues, ", "))))
+				}
 				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players)
 			} else {
 				player.Hand.drawCard(&room.Deck)
@@ -355,7 +359,7 @@ func handleConnection(conn net.Conn, room *Room) {
 				}
 				room.Players[player.PlayerID] = player
 
-				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": false, \"currentHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
+				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": false, \"currentHand\": \"%s\", \"wonGame\": false}\n", strings.Join(cardValues, ", "))))
 			}
 		}
 		cond.L.Unlock()
@@ -371,7 +375,19 @@ func handleConnection(conn net.Conn, room *Room) {
 			cond.Wait()
 		}
 		cond.L.Unlock()
-		conn.Write([]byte("{\"waiting\": \"false\"}\n"))
+
+		for _, player := range room.Players {
+			if currentPlayer == player.PlayerNumber {
+				if len(player.Hand.Cards) == 0 {
+					conn.Write([]byte(fmt.Sprintf("{\"wonGame\": true, \"winningPlayer\": \"%d\"}\n", currentPlayer+1)))
+					return
+				} else {
+					break
+				}
+			}
+		}
+		conn.Write([]byte("{\"wonGame\": false}\n"))
+		return
 	}
 
 	fmt.Printf("Received message: %s\n", netData)
