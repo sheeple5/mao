@@ -16,6 +16,7 @@ type Player struct {
 	PlayerID     string
 	PlayerNumber int
 	CanStartGame bool
+	RoomCode     string
 }
 
 func (player Player) playCard(playedCard string) []any {
@@ -26,7 +27,7 @@ func (player Player) playCard(playedCard string) []any {
 	defer conn.Close()
 
 	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"playCard\": \"%s\"}\n", player.PlayerID, playedCard))
+	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"playCard\": \"%s\"}\n", player.PlayerID, player.RoomCode, playedCard))
 	if err != nil {
 		panic(err)
 	}
@@ -64,7 +65,7 @@ func (player Player) playCard(playedCard string) []any {
 	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonGame}
 }
 
-func getPlayer(player *Player) {
+func createGame(player *Player) {
 	conn, err := net.Dial("tcp", "localhost:9090")
 	if err != nil {
 		panic(err)
@@ -72,7 +73,7 @@ func getPlayer(player *Player) {
 	defer conn.Close()
 
 	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString("{\"joinGame\": \"ABCD\"}\n")
+	_, err = writer.WriteString("{\"action\": \"createRoom\"}\n")
 	if err != nil {
 		panic(err)
 	}
@@ -102,6 +103,45 @@ func getPlayer(player *Player) {
 	}
 }
 
+func joinGame(player *Player, roomCode string) {
+	conn, err := net.Dial("tcp", "localhost:9090")
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	writer := bufio.NewWriter(conn)
+	_, err = writer.WriteString(fmt.Sprintf("{\"joinRoom\": \"%s\"}\n", roomCode))
+	if err != nil {
+		panic(err)
+	}
+
+	err = writer.Flush()
+	if err != nil {
+		panic(err)
+	}
+
+	netData, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		panic(err)
+	}
+
+	// Converts the received JSON data and converts it into a map
+	var playerData map[string]any
+	err = json.Unmarshal([]byte(netData), &playerData)
+	if err != nil {
+		fmt.Println(netData)
+		panic(err)
+	}
+
+	// Loads the JSON data into the player struct using mapstructure
+	err = mapstructure.Decode(playerData, &player)
+	if err != nil {
+		panic(err)
+	}
+	player.RoomCode = roomCode
+}
+
 func startGame(player Player) string {
 	conn, err := net.Dial("tcp", "localhost:9090")
 	if err != nil {
@@ -110,7 +150,7 @@ func startGame(player Player) string {
 	defer conn.Close()
 
 	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"action\": \"startGame\"}\n", player.PlayerID))
+	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"startGame\"}\n", player.PlayerID, player.RoomCode))
 	if err != nil {
 		panic(err)
 	}
@@ -152,7 +192,8 @@ func waitForGameStart(player Player) string {
 	defer conn.Close()
 
 	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"action\": \"waitingStart\"}\n", player.PlayerID))
+	fmt.Println(player.RoomCode)
+	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"waitingStart\"}\n", player.PlayerID, player.RoomCode))
 	if err != nil {
 		panic(err)
 	}
@@ -186,7 +227,7 @@ func waitForGameStart(player Player) string {
 	return initialHandDetails.InitialHand
 }
 
-func requestTurn() []string {
+func requestTurn(player Player) []string {
 	conn, err := net.Dial("tcp", "localhost:9090")
 	if err != nil {
 		panic(err)
@@ -194,7 +235,7 @@ func requestTurn() []string {
 	defer conn.Close()
 
 	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString("{\"action\": \"requestTurn\"}\n")
+	_, err = writer.WriteString(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"requestTurn\"}\n", player.RoomCode))
 	if err != nil {
 		panic(err)
 	}
@@ -227,10 +268,11 @@ func requestTurn() []string {
 		panic(err)
 	}
 
+	fmt.Println(requestTurnDetails.PlayerNumber)
 	return []string{strconv.Itoa(requestTurnDetails.PlayerNumber), requestTurnDetails.TopCard}
 }
 
-func waitTurn() string {
+func waitTurn(player Player) string {
 	conn, err := net.Dial("tcp", "localhost:9090")
 	if err != nil {
 		panic(err)
@@ -238,7 +280,7 @@ func waitTurn() string {
 	defer conn.Close()
 
 	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString("{\"action\": \"waitTurn\"}\n")
+	_, err = writer.WriteString(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"waitTurn\"}\n", player.RoomCode))
 	if err != nil {
 		panic(err)
 	}
@@ -283,98 +325,92 @@ func main() {
 	var handList string
 
 	var choice string
-	fmt.Print("Press Y to join the game: ")
+	fmt.Print("Press C to create the game or J to join the game: ")
 	fmt.Scan(&choice)
 
-	if choice == "Y" {
-		getPlayer(&player)
-		fmt.Println(player)
+	if choice == "C" {
+		createGame(&player)
+	} else if choice == "J" {
+		var roomCode string
+		fmt.Print("Enter a room code: ")
+		fmt.Scan(&roomCode)
+		joinGame(&player, roomCode)
+	}
 
-		if player.CanStartGame {
-			fmt.Print("Press Y to start the game: ")
-			fmt.Scan(&choice)
+	fmt.Println(player)
 
-			if choice == "Y" {
-				handList = startGame(player)
-			}
-		} else {
-			fmt.Println("Waiting for game to start...")
-			handList = waitForGameStart(player)
+	if player.CanStartGame {
+		fmt.Print("Press Y to start the game: ")
+		fmt.Scan(&choice)
+
+		if choice == "Y" {
+			handList = startGame(player)
 		}
+	} else {
+		fmt.Println("Waiting for game to start...")
+		handList = waitForGameStart(player)
+	}
 
-		for {
-			// Request turn
-			turnDetails := requestTurn()
-			turnPlayerNumber := turnDetails[0]
-			turnTopCard := turnDetails[1]
+	for {
+		// Request turn
+		turnDetails := requestTurn(player)
+		turnPlayerNumber := turnDetails[0]
+		turnTopCard := turnDetails[1]
 
-			adjustedTurnPlayerNumber, _ := strconv.Atoi(turnPlayerNumber)
-			adjustedTurnPlayerNumber += 1
-			// If my player number equals the returned turn player, take turn. Else, wait for turn and display current hand/top card
-			if strconv.Itoa(player.PlayerNumber) == turnPlayerNumber {
-				var playedCard string
-				fmt.Printf("Player %d's turn...\n", adjustedTurnPlayerNumber)
-				fmt.Printf("Current Card: %s\n", turnTopCard)
-				fmt.Printf("My Hand: %s\n", handList)
+		adjustedTurnPlayerNumber, _ := strconv.Atoi(turnPlayerNumber)
+		adjustedTurnPlayerNumber += 1
+		// If my player number equals the returned turn player, take turn. Else, wait for turn and display current hand/top card
+		if strconv.Itoa(player.PlayerNumber) == turnPlayerNumber {
+			var playedCard string
+			fmt.Printf("Player %d's turn...\n", adjustedTurnPlayerNumber)
+			fmt.Printf("Current Card: %s\n", turnTopCard)
+			fmt.Printf("My Hand: %s\n", handList)
 
-				for {
-					fmt.Print("Choose a card to play (or 'draw' to draw): ")
-					fmt.Scan(&playedCard)
+			for {
+				fmt.Print("Choose a card to play (or 'draw' to draw): ")
+				fmt.Scan(&playedCard)
 
-					if !slices.Contains(strings.Split(handList, ", "), playedCard) && playedCard != "draw" {
-						fmt.Println("Error: The card you entered is not in hand.")
-					} else {
-						break
-					}
-				}
-
-				playResults := player.playCard(playedCard)
-				if wonGame, ok := playResults[2].(bool); ok {
-					if wonGame {
-						fmt.Println("Congratulations, you win!")
-						break
-					}
-				}
-
-				if currentHand, ok := playResults[1].(string); ok {
-					if playSucceeded, ok := playResults[0].(bool); ok {
-						if playSucceeded {
-							fmt.Println("VALID")
-							fmt.Println(currentHand)
-							handList = currentHand
-						} else {
-							fmt.Println("INVALID")
-							fmt.Println(currentHand)
-							handList = currentHand
-						}
-					}
-				}
-				// send card to play. can validate user actually has card on server side now cause it's handled over there
-				// once card has actually been played and is valid, respond back with new handlist for next turn
-			} else {
-				fmt.Printf("Player %d's turn...\n", adjustedTurnPlayerNumber)
-				fmt.Printf("Current Card: %s\n", turnTopCard)
-				fmt.Printf("My Hand: %s\n", handList)
-				fmt.Println("Waiting for turn...")
-				winningPlayer := waitTurn()
-
-				if winningPlayer != "" {
-					fmt.Printf("Game over! Player %s wins.", winningPlayer)
+				if !slices.Contains(strings.Split(handList, ", "), playedCard) && playedCard != "draw" {
+					fmt.Println("Error: The card you entered is not in hand.")
+				} else {
 					break
 				}
 			}
 
-			// request turn
-			// if playerID = my ID, branch into playing a card
-			// otherwise, send an action: waitTurn
-			// after turn played, server will respond to both playTurn (or whatever) waitTurn with a game status: win, lose, or continue
-			//  - if lose, break and say who won
-			//  - if win, break and show congrats or something
-			//  - if continue, have everyone send another request turn and go from there
-		}
-		// On game end, send winning playe prompt to request a new rule
+			playResults := player.playCard(playedCard)
+			if wonGame, ok := playResults[2].(bool); ok {
+				if wonGame {
+					fmt.Println("Congratulations, you win!")
+					break
+				}
+			}
 
-	} else {
-		fmt.Println("Goodbye")
+			if currentHand, ok := playResults[1].(string); ok {
+				if playSucceeded, ok := playResults[0].(bool); ok {
+					if playSucceeded {
+						fmt.Println("VALID")
+						fmt.Println(currentHand)
+						handList = currentHand
+					} else {
+						fmt.Println("INVALID")
+						fmt.Println(currentHand)
+						handList = currentHand
+					}
+				}
+			}
+			// send card to play. can validate user actually has card on server side now cause it's handled over there
+			// once card has actually been played and is valid, respond back with new handlist for next turn
+		} else {
+			fmt.Printf("Player %d's turn...\n", adjustedTurnPlayerNumber)
+			fmt.Printf("Current Card: %s\n", turnTopCard)
+			fmt.Printf("My Hand: %s\n", handList)
+			fmt.Println("Waiting for turn...")
+			winningPlayer := waitTurn(player)
+
+			if winningPlayer != "" {
+				fmt.Printf("Game over! Player %s wins.", winningPlayer)
+				break
+			}
+		}
 	}
 }
