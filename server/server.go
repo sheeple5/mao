@@ -73,6 +73,8 @@ type Room struct {
 	DrawTurn   int
 	PlayerTurn int
 	Rules      []Rules
+	Mu         sync.Mutex
+	Cond       *sync.Cond
 }
 
 type Card struct {
@@ -203,14 +205,8 @@ func (deck *Deck) drawHand() []string {
 	return cardValues
 }
 
-var (
-	mu   sync.Mutex
-	cond = sync.NewCond(&mu)
-)
-
 func main() {
 	// Create deck
-	room := Room{Deck: initializeDeck(), IsStarted: false, Players: make(map[string]Player), Rules: []Rules{baseRule}}
 	rooms := make(map[string]*Room)
 
 	l, err := net.Listen("tcp", ":9090")
@@ -220,7 +216,6 @@ func main() {
 	defer l.Close()
 	fmt.Println("Listening on all interfaces on port 9090")
 
-	room.Deck.printDeck()
 	for {
 		conn, err := l.Accept()
 		if err != nil {
@@ -247,6 +242,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 			roomCode += string(randomLetter)
 		}
 		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), IsStarted: false, Players: make(map[string]Player), Rules: []Rules{baseRule}}
+		newRoom.Cond = sync.NewCond(&newRoom.Mu)
 
 		newPlayer := Player{PlayerID: uuid.NewString()}
 		newPlayer.PlayerNumber = 0
@@ -279,10 +275,10 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		roomCode := re.FindStringSubmatch(netData)[2]
 		room := rooms[roomCode]
 
-		cond.L.Lock()
+		room.Cond.L.Lock()
 		for !room.IsStarted {
 			fmt.Println("waiting")
-			cond.Wait()
+			room.Cond.Wait()
 		}
 		cardValues := []string{}
 		for _, card := range room.Players[receivedID].Hand.Cards {
@@ -290,8 +286,8 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		}
 		conn.Write([]byte(fmt.Sprintf("{\"initialHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
 
-		cond.Signal()
-		cond.L.Unlock()
+		room.Cond.Signal()
+		room.Cond.L.Unlock()
 		return
 	} else if ok, _ := regexp.MatchString("\\{\"playerID\": \"[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}\", \"roomCode\": \"[A-Z]{4}\", \"action\": \"startGame\"\\}", netData); ok {
 		re := regexp.MustCompile("\\{\"playerID\": \"([a-f0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})\", \"roomCode\": \"([A-Z]{4})\", \"action\": \"startGame\"\\}")
@@ -300,7 +296,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room := rooms[roomCode]
 
 		// Checks to see if a real player's UUID was received
-		cond.L.Lock()
+		room.Cond.L.Lock()
 		if _, ok := room.Players[receivedID]; !ok {
 			conn.Write([]byte("{\"gameStarted\": \"false\", \"message\": \"Did not receive a valid UUID\"}\n"))
 			return
@@ -316,8 +312,8 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		} else {
 			conn.Write([]byte("{\"gameStarted\": \"false\", \"message\": \"Only first player can start the game\"}\n"))
 		}
-		cond.Signal()
-		cond.L.Unlock()
+		room.Cond.Signal()
+		room.Cond.L.Unlock()
 		return
 	} else if ok, _ := regexp.MatchString("\\{\"playerID\": \"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\", \"roomCode\": \"[A-Z]{4}\", \"action\": \"drawHand\"\\}", netData); ok {
 		re := regexp.MustCompile("\\{\"playerID\": \"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\", \"roomCode\": \"([A-Z]{4})\", \"action\": \"drawHand\"\\}")
@@ -341,7 +337,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		playedCard := re.FindStringSubmatch(netData)[3]
 		player := room.Players[receivedID]
 
-		cond.L.Lock()
+		room.Cond.L.Lock()
 		if player.PlayerNumber == room.PlayerTurn {
 			if playedCard == "draw" {
 				player.Hand.drawCard(&room.Deck)
@@ -393,8 +389,8 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": false, \"currentHand\": \"%s\", \"wonGame\": false}\n", strings.Join(cardValues, ", "))))
 			}
 		}
-		cond.Signal()
-		cond.L.Unlock()
+		room.Cond.Signal()
+		room.Cond.L.Unlock()
 		return
 	} else if ok, _ := regexp.MatchString("{\"roomCode\": \"[A-Z]{4}\", \"action\": \"requestTurn\"}", netData); ok {
 		re := regexp.MustCompile("{\"roomCode\": \"([A-Z]{4})\", \"action\": \"requestTurn\"}")
@@ -407,10 +403,10 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		roomCode := re.FindStringSubmatch(netData)[1]
 		room := rooms[roomCode]
 		currentPlayer := room.PlayerTurn
-		cond.L.Lock() // Should probably convert other waiting periods to this as well, like waiting on game start
+		room.Cond.L.Lock() // Should probably convert other waiting periods to this as well, like waiting on game start
 		for currentPlayer == room.PlayerTurn {
 			fmt.Println("waiting...")
-			cond.Wait()
+			room.Cond.Wait()
 		}
 
 		for _, player := range room.Players {
@@ -422,8 +418,8 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 			}
 		}
 
-		cond.Signal()
-		cond.L.Unlock()
+		room.Cond.Signal()
+		room.Cond.L.Unlock()
 		conn.Write([]byte("{\"wonGame\": false}\n"))
 		return
 	}
