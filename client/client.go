@@ -80,7 +80,7 @@ func createGame(player *Player) {
 }
 
 func joinGame(player *Player, roomCode string) {
-	netData := sendData(fmt.Sprintf("{\"joinRoom\": \"%s\"}\n", roomCode))
+	netData := sendData(fmt.Sprintf("{\"action\": \"joinRoom\", \"roomCode\": \"%s\"}\n", roomCode))
 
 	var playerData map[string]any
 	err := json.Unmarshal([]byte(netData), &playerData)
@@ -111,7 +111,7 @@ func startGame(player Player) string {
 		panic(err)
 	}
 
-	// Loads the JSON data into the drawAction struct using mapstructure
+	// Loads the JSON data into the struct using mapstructure
 	err = mapstructure.Decode(handData, &initialHandDetails)
 	if err != nil {
 		panic(err)
@@ -133,7 +133,7 @@ func waitForGameStart(player Player) string {
 		panic(err)
 	}
 
-	// Loads the JSON data into the drawAction struct using mapstructure
+	// Loads the JSON data into the struct using mapstructure
 	err = mapstructure.Decode(handData, &initialHandDetails)
 	if err != nil {
 		panic(err)
@@ -156,7 +156,7 @@ func requestTurn(player Player) []string {
 		panic(err)
 	}
 
-	// Loads the JSON data into the drawAction struct using mapstructure
+	// Loads the JSON data into the struct using mapstructure
 	err = mapstructure.Decode(turnData, &requestTurnDetails)
 	if err != nil {
 		panic(err)
@@ -181,7 +181,7 @@ func waitTurn(player Player) string {
 		panic(err)
 	}
 
-	// Loads the JSON data into the drawAction struct using mapstructure
+	// Loads the JSON data into the struct using mapstructure
 	err = mapstructure.Decode(gameData, &gameWonDetails)
 	if err != nil {
 		panic(err)
@@ -195,7 +195,7 @@ func waitTurn(player Player) string {
 }
 
 func (player Player) playCard(playedCard string) []any {
-	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"playCard\": \"%s\"}\n", player.PlayerID, player.RoomCode, playedCard))
+	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"playCard\", \"card\": \"%s\"}\n", player.PlayerID, player.RoomCode, playedCard))
 	type RuleCheckResults struct {
 		RulesPassed bool
 		CurrentHand string
@@ -210,7 +210,7 @@ func (player Player) playCard(playedCard string) []any {
 		panic(err)
 	}
 
-	// Loads the JSON data into the player struct using mapstructure
+	// Loads the JSON data into the struct using mapstructure
 	err = mapstructure.Decode(ruleData, &ruleCheckResults)
 	if err != nil {
 		panic(err)

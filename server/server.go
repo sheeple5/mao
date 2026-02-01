@@ -2,18 +2,90 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"net"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/google/uuid"
 )
 
 type Rules func(card Card, deck Deck) string
+
+type Room struct {
+	RoomCode   string
+	Players    map[string]*Player
+	Deck       Deck
+	IsStarted  bool
+	DrawTurn   int
+	PlayerTurn int
+	Rules      []Rules
+	Mu         sync.Mutex
+	Cond       *sync.Cond
+}
+
+type Deck struct {
+	Pile        []Card
+	DiscardPile []Card
+}
+
+type Player struct {
+	Hand         Hand
+	PlayerID     string
+	PlayerNumber int
+	CanStartGame bool
+}
+
+type Hand struct {
+	Cards []Card
+}
+
+type Card struct {
+	Rank  string
+	Suit  string
+	Value string
+}
+
+type ActionDetails struct {
+	PlayerID string
+	Action   string
+	RoomCode string
+	Card     string
+}
+
+func sendData(conn net.Conn, payload []byte) {
+	_, err := conn.Write(payload)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func receiveData(conn net.Conn) ActionDetails {
+	var actionDetails ActionDetails
+	netData, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		panic(err)
+	}
+
+	var actionData map[string]any
+	err = json.Unmarshal([]byte(netData), &actionData)
+	if err != nil {
+		fmt.Println(netData)
+		panic(err)
+	}
+
+	// Loads the JSON data into the struct using mapstructure
+	err = mapstructure.Decode(actionData, &actionDetails)
+	if err != nil {
+		panic(err)
+	}
+	return actionDetails
+}
 
 // The base "UNO" rule
 func baseRule(card Card, deck Deck) string {
@@ -28,7 +100,7 @@ func baseRule(card Card, deck Deck) string {
 	}
 }
 
-func rulesCheck(player Player, playedCard string, room Room) bool {
+func rulesCheck(player Player, playedCard string, room *Room) bool {
 	// Check if card is actually in hand
 	foundCard := false
 	for _, card := range player.Hand.Cards {
@@ -58,64 +130,24 @@ func rulesCheck(player Player, playedCard string, room Room) bool {
 	return true
 }
 
-type Player struct {
-	Hand         Hand
-	PlayerID     string
-	PlayerNumber int
-	CanStartGame bool
-}
-
-type Room struct {
-	RoomCode   string
-	Players    map[string]*Player
-	Deck       Deck
-	IsStarted  bool
-	DrawTurn   int
-	PlayerTurn int
-	Rules      []Rules
-	Mu         sync.Mutex
-	Cond       *sync.Cond
-}
-
-type Card struct {
-	Rank  string
-	Suit  string
-	Value string
-}
-
 func convertCard(playedCard string) Card {
-	re := regexp.MustCompile("((?:[AKQJ2-9]|10))([SCHD])")
-	rank := re.FindStringSubmatch(playedCard)[1]
-	suit := re.FindStringSubmatch(playedCard)[2]
-
-	return Card{Rank: rank, Suit: suit, Value: playedCard}
+	return Card{Rank: playedCard[:len(playedCard)-1], Suit: string(playedCard[len(playedCard)-1]), Value: playedCard}
 }
 
-type Deck struct {
-	Pile        []Card
-	DiscardPile []Card
-}
-
-type Hand struct {
-	Cards []Card
-}
-
-func (hand Hand) printHand() {
-	fmt.Println("Hand: ")
-	fmt.Println("----------------------")
-	for i, card := range hand.Cards {
-		if i != len(hand.Cards)-1 {
-			fmt.Printf("%s, ", card.Value)
-		} else {
-			fmt.Printf("%s\n\n", card.Value)
-		}
+func generateRoomCode() string {
+	var roomCode bytes.Buffer
+	for range 4 {
+		randomLetter := rand.IntN(26) + 65
+		roomCode.WriteString(string(rune(randomLetter)))
 	}
+	return roomCode.String()
 }
 
 func (hand *Hand) drawCard(deck *Deck) {
 	if len(deck.Pile) == 0 {
 		newPile := make([]Card, len(deck.DiscardPile)-1)
 		copy(newPile, deck.DiscardPile[:len(deck.DiscardPile)-1])
+
 		deck.Pile = newPile
 		shuffleCards(deck.Pile)
 		deck.DiscardPile = deck.DiscardPile[len(deck.DiscardPile)-1:]
@@ -134,14 +166,15 @@ func (player *Player) drawHand(room *Room) {
 	room.Deck.Pile = room.Deck.Pile[7:]
 }
 
-func shuffleCards(pile []Card) {
-	rand.Shuffle(len(pile), func(i, j int) {
-		pile[i], pile[j] = pile[j], pile[i]
-	})
+func (player Player) listCards() string {
+	cardValues := []string{}
+	for _, card := range player.Hand.Cards {
+		cardValues = append(cardValues, card.Value)
+	}
+	return strings.Join(cardValues, ", ")
 }
 
 func initializeDeck() Deck {
-	// Load up card pile
 	pile := []Card{}
 	for _, suit := range []string{"S", "C", "H", "D"} {
 		for _, rank := range []string{"A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"} {
@@ -161,58 +194,31 @@ func initializeDeck() Deck {
 }
 
 func (deck Deck) getCurrentTop() Card {
-	currentCard := deck.DiscardPile[len(deck.DiscardPile)-1]
-	return currentCard
+	return deck.DiscardPile[len(deck.DiscardPile)-1]
 }
 
-func (deck Deck) printCurrentTop() {
-	currentCard := deck.getCurrentTop()
-
-	fmt.Println("Current Card: ")
-	fmt.Println("----------------------")
-	fmt.Printf("%s\n\n", currentCard.Value)
-}
-
-func (deck Deck) printPile(pileType string) {
-	if pileType == "pile" {
-		fmt.Println("Pile: ")
-		fmt.Println("----------------------")
-		printPile(deck.Pile)
-	} else if pileType == "discardPile" {
-		fmt.Println("Discard Pile: ")
-		fmt.Println("----------------------")
-		printPile(deck.DiscardPile)
-	}
-}
-
-func (deck Deck) printDeck() {
-	deck.printPile("pile")
-	deck.printPile("discardPile")
-}
-
-func printPile(pile []Card) {
-	for i, card := range pile {
-		if i != len(pile)-1 {
-			fmt.Printf("%s, ", card.Value)
-		} else {
-			fmt.Printf("%s\n\n", card.Value)
-		}
-	}
+func shuffleCards(pile []Card) {
+	rand.Shuffle(len(pile), func(i, j int) {
+		pile[i], pile[j] = pile[j], pile[i]
+	})
 }
 
 func main() {
-	// Create deck
 	rooms := make(map[string]*Room)
 
-	l, err := net.Listen("tcp", ":9090")
+	listener, err := net.Listen("tcp", ":9090")
 	if err != nil {
 		panic(err)
 	}
-	defer l.Close()
+	defer func() {
+		if closeErr := listener.Close(); closeErr != nil {
+			panic(closeErr)
+		}
+	}()
 	fmt.Println("Listening on all interfaces on port 9090")
 
 	for {
-		conn, err := l.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			panic(err)
 		}
@@ -222,177 +228,135 @@ func main() {
 }
 
 func handleConnection(conn net.Conn, rooms map[string]*Room) {
-	defer conn.Close()
-
-	netData, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		panic(err)
-	}
-
-	netData = strings.TrimSpace(netData)
-	if netData == "{\"action\": \"createRoom\"}" {
-		var roomCode string
-		for range 4 {
-			randomLetter := rand.IntN(26) + 65
-			roomCode += string(randomLetter)
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			panic(closeErr)
 		}
+	}()
+
+	actionDetails := receiveData(conn)
+	switch actionDetails.Action {
+	case "createRoom":
+		roomCode := generateRoomCode()
 		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), IsStarted: false, Players: make(map[string]*Player), Rules: []Rules{baseRule}}
 		newRoom.Cond = sync.NewCond(&newRoom.Mu)
 
-		newPlayer := Player{PlayerID: uuid.NewString()}
-		newPlayer.PlayerNumber = 0
-		newPlayer.CanStartGame = true
+		newPlayer := Player{PlayerID: uuid.NewString(), PlayerNumber: 0, CanStartGame: true}
 		newPlayer.drawHand(&newRoom)
 
 		newRoom.Players[newPlayer.PlayerID] = &newPlayer
 		rooms[roomCode] = &newRoom
-		conn.Write([]byte(fmt.Sprintf("{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s, \"roomCode\": \"%s\"}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame), newRoom.RoomCode)))
-		return
 
-	} else if ok, _ := regexp.MatchString("{\"joinRoom\": \"[A-Z]{4}\"}", netData); ok {
-		re := regexp.MustCompile("{\"joinRoom\": \"([A-Z]{4})\"}")
-		roomCode := re.FindStringSubmatch(netData)[1]
-		room := rooms[roomCode]
-		// Need to do a check if the game state has started or not. If yes, give player UUID and stuff. If no, return a can't join error
-		// - OR Have a client send a create room message? And then that player controls the room?
-		// Also need to check if any players have joined. If no, canStartGame is returned true. Else, false
-		newPlayer := Player{PlayerID: uuid.NewString()}
-		newPlayer.PlayerNumber = len(room.Players)
-		newPlayer.CanStartGame = false
+		sendData(conn, fmt.Appendf(nil, "{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s, \"roomCode\": \"%s\"}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame), newRoom.RoomCode))
+	case "joinRoom":
+		// Need to validate room code is valid
+		room := rooms[actionDetails.RoomCode]
+
+		newPlayer := Player{PlayerID: uuid.NewString(), PlayerNumber: len(room.Players), CanStartGame: false}
 		newPlayer.drawHand(room)
 
 		room.Players[newPlayer.PlayerID] = &newPlayer
-		conn.Write([]byte(fmt.Sprintf("{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame))))
-		return
-	} else if ok, _ := regexp.MatchString("\\{\"playerID\": \"[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}\", \"roomCode\": \"[A-Z]{4}\", \"action\": \"waitingStart\"\\}", netData); ok {
-		re := regexp.MustCompile("\\{\"playerID\": \"([a-f0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})\", \"roomCode\": \"([A-Z]{4})\", \"action\": \"waitingStart\"\\}")
-		receivedID := re.FindStringSubmatch(netData)[1]
-		roomCode := re.FindStringSubmatch(netData)[2]
-		room := rooms[roomCode]
+
+		sendData(conn, fmt.Appendf(nil, "{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame)))
+	case "waitingStart":
+		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
+		room := rooms[actionDetails.RoomCode]
+		player := room.Players[actionDetails.PlayerID]
 
 		room.Cond.L.Lock()
 		for !room.IsStarted {
-			fmt.Println("waiting")
 			room.Cond.Wait()
 		}
-		cardValues := []string{}
-		for _, card := range room.Players[receivedID].Hand.Cards {
-			cardValues = append(cardValues, card.Value)
-		}
-		conn.Write([]byte(fmt.Sprintf("{\"initialHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
+
+		cardList := player.listCards()
+		sendData(conn, fmt.Appendf(nil, "{\"initialHand\": \"%s\"}\n", cardList))
 
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
-		return
-	} else if ok, _ := regexp.MatchString("\\{\"playerID\": \"[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}\", \"roomCode\": \"[A-Z]{4}\", \"action\": \"startGame\"\\}", netData); ok {
-		re := regexp.MustCompile("\\{\"playerID\": \"([a-f0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})\", \"roomCode\": \"([A-Z]{4})\", \"action\": \"startGame\"\\}")
-		receivedID := re.FindStringSubmatch(netData)[1]
-		roomCode := re.FindStringSubmatch(netData)[2]
-		room := rooms[roomCode]
+	case "startGame":
+		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
+		room := rooms[actionDetails.RoomCode]
+		player := room.Players[actionDetails.PlayerID]
 
-		// Checks to see if a real player's UUID was received
+		// Checks to see if the given player can start the game and, if so, does so
 		room.Cond.L.Lock()
-		if _, ok := room.Players[receivedID]; !ok {
-			conn.Write([]byte("{\"gameStarted\": \"false\", \"message\": \"Did not receive a valid UUID\"}\n"))
-			return
+		if player.CanStartGame {
+			room.IsStarted = true
+			cardList := player.listCards()
+			sendData(conn, fmt.Appendf(nil, "{\"initialHand\": \"%s\"}\n", cardList))
+		} else {
+			sendData(conn, []byte("{\"gameStarted\": \"false\", \"message\": \"Only first player can start the game\"}\n"))
 		}
 
-		if room.Players[receivedID].CanStartGame {
-			room.IsStarted = true
-			cardValues := []string{}
-			for _, card := range room.Players[receivedID].Hand.Cards {
-				cardValues = append(cardValues, card.Value)
-			}
-			conn.Write([]byte(fmt.Sprintf("{\"initialHand\": \"%s\"}\n", strings.Join(cardValues, ", "))))
-		} else {
-			conn.Write([]byte("{\"gameStarted\": \"false\", \"message\": \"Only first player can start the game\"}\n"))
-		}
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
-		return
-	} else if ok, _ := regexp.MatchString("\\{\"playerID\": \"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\", \"roomCode\": \"[A-Z]{4}\", \"playCard\": \"(?:draw|(?:[AKQJ2-9]|10)[SCHD])\"\\}", netData); ok {
-		re := regexp.MustCompile("\\{\"playerID\": \"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\", \"roomCode\": \"([A-Z]{4})\", \"playCard\": \"(draw|(?:[AKQJ2-9]|10)[SCHD])\"\\}")
-		receivedID := re.FindStringSubmatch(netData)[1]
-		roomCode := re.FindStringSubmatch(netData)[2]
-		room := rooms[roomCode]
-		playedCard := re.FindStringSubmatch(netData)[3]
-		player := room.Players[receivedID]
+	case "playCard":
+		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
+		room := rooms[actionDetails.RoomCode]
+		player := room.Players[actionDetails.PlayerID]
+		playedCard := actionDetails.Card
 
 		room.Cond.L.Lock()
 		if player.PlayerNumber == room.PlayerTurn {
 			if playedCard == "draw" {
 				player.Hand.drawCard(&room.Deck)
-				cardValues := []string{} // Need to turn this into a Hand method, this is reused a lot
-				for _, card := range player.Hand.Cards {
-					cardValues = append(cardValues, card.Value)
-				}
 
-				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", strings.Join(cardValues, ", "))))
-				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players)
-			} else if rulesCheck(*player, playedCard, *room) { // check against the rules. Need to check that card is in hand and that it passes the rules. Presumably updates the hand before response is passed
+				cardList := player.listCards()
+				sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", cardList))
+				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
+			} else if rulesCheck(*player, playedCard, room) {
 				// Pop card
 				var popIndex int
 				for i, card := range player.Hand.Cards {
 					if card.Value == playedCard {
 						popIndex = i
+						break
 					}
 				}
-				player.Hand.printHand()
 				room.Deck.DiscardPile = append(room.Deck.DiscardPile, player.Hand.Cards[popIndex])
 
-				newHand := make([]Card, 0, len(player.Hand.Cards)-1)
-				newHand = append(newHand, player.Hand.Cards[:popIndex]...)
-				newHand = append(newHand, player.Hand.Cards[popIndex+1:]...)
-				player.Hand.Cards = newHand
-				player.Hand.printHand()
+				poppedHand := make([]Card, 0, len(player.Hand.Cards)-1)
+				poppedHand = append(poppedHand, player.Hand.Cards[:popIndex]...)
+				poppedHand = append(poppedHand, player.Hand.Cards[popIndex+1:]...)
+				player.Hand.Cards = poppedHand
 
-				// Convert cards to string list
-				cardValues := []string{}
-				for _, card := range player.Hand.Cards {
-					cardValues = append(cardValues, card.Value)
-				}
-				player.Hand.printHand()
-
+				cardList := player.listCards()
 				if len(player.Hand.Cards) > 0 {
-					conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", strings.Join(cardValues, ", "))))
+					sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", cardList))
 				} else {
-					conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": true}\n", strings.Join(cardValues, ", "))))
+					sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": true}\n", cardList))
 				}
-				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players)
+				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
 			} else {
 				player.Hand.drawCard(&room.Deck)
-				cardValues := []string{} // Need to turn this into a Hand method, this is reused a lot
-				for _, card := range player.Hand.Cards {
-					cardValues = append(cardValues, card.Value)
-				}
 
-				conn.Write([]byte(fmt.Sprintf("{\"rulesPassed\": false, \"currentHand\": \"%s\", \"wonGame\": false}\n", strings.Join(cardValues, ", "))))
+				cardList := player.listCards()
+				sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": false, \"currentHand\": \"%s\", \"wonGame\": false}\n", cardList))
 			}
+		} else {
+			sendData(conn, []byte("{\"playCard\": \"false\", \"message\": \"It is not this player's turn\"}\n"))
 		}
+
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
-		return
-	} else if ok, _ := regexp.MatchString("{\"roomCode\": \"[A-Z]{4}\", \"action\": \"requestTurn\"}", netData); ok {
-		re := regexp.MustCompile("{\"roomCode\": \"([A-Z]{4})\", \"action\": \"requestTurn\"}")
-		roomCode := re.FindStringSubmatch(netData)[1]
-		room := rooms[roomCode]
-		conn.Write([]byte(fmt.Sprintf("{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().Value)))
-		return
-	} else if ok, _ := regexp.MatchString("{\"roomCode\": \"[A-Z]{4}\", \"action\": \"waitTurn\"}", netData); ok {
-		re := regexp.MustCompile("{\"roomCode\": \"([A-Z]{4})\", \"action\": \"waitTurn\"}")
-		roomCode := re.FindStringSubmatch(netData)[1]
-		room := rooms[roomCode]
+	case "requestTurn":
+		// Need to validate roomCode
+		room := rooms[actionDetails.RoomCode]
+		sendData(conn, fmt.Appendf(nil, "{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().Value))
+	case "waitTurn":
+		// Need to validate roomCode
+		room := rooms[actionDetails.RoomCode]
 		currentPlayer := room.PlayerTurn
-		room.Cond.L.Lock() // Should probably convert other waiting periods to this as well, like waiting on game start
+
+		room.Cond.L.Lock()
 		for currentPlayer == room.PlayerTurn {
-			fmt.Println("waiting...")
 			room.Cond.Wait()
 		}
 
 		for _, player := range room.Players {
 			if currentPlayer == player.PlayerNumber {
 				if len(player.Hand.Cards) == 0 {
-					conn.Write([]byte(fmt.Sprintf("{\"wonGame\": true, \"winningPlayer\": \"%d\"}\n", currentPlayer+1)))
+					sendData(conn, fmt.Appendf(nil, "{\"wonGame\": true, \"winningPlayer\": \"%d\"}\n", currentPlayer+1))
 				}
 				break
 			}
@@ -400,10 +364,8 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
-		conn.Write([]byte("{\"wonGame\": false}\n"))
-		return
+		sendData(conn, []byte("{\"wonGame\": false}\n"))
+	default:
+		fmt.Printf("Received message: %v\n", actionDetails)
 	}
-
-	fmt.Printf("Received message: %s\n", netData)
-	conn.Write([]byte(fmt.Sprintf("Message received: %s\n", netData)))
 }
