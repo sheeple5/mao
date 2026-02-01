@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-viper/mapstructure/v2"
+	"golang.org/x/term"
 )
 
 type Player struct {
@@ -19,15 +22,20 @@ type Player struct {
 	RoomCode     string
 }
 
-func (player Player) playCard(playedCard string) []any {
+func sendData(payload string) string {
 	conn, err := net.Dial("tcp", "localhost:9090")
 	if err != nil {
 		panic(err)
 	}
-	defer conn.Close()
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			panic(closeErr)
+		}
+	}()
 
 	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"playCard\": \"%s\"}\n", player.PlayerID, player.RoomCode, playedCard))
+	_, err = writer.WriteString(payload)
 	if err != nil {
 		panic(err)
 	}
@@ -42,55 +50,14 @@ func (player Player) playCard(playedCard string) []any {
 		panic(err)
 	}
 
-	type RuleCheckResults struct {
-		RulesPassed bool
-		CurrentHand string
-		WonGame     bool
-	}
-	// Converts the received JSON data and converts it into a map
-	var ruleCheckResults RuleCheckResults
-	var ruleData map[string]any
-	err = json.Unmarshal([]byte(netData), &ruleData)
-	if err != nil {
-		fmt.Println(netData)
-		panic(err)
-	}
-
-	// Loads the JSON data into the player struct using mapstructure
-	err = mapstructure.Decode(ruleData, &ruleCheckResults)
-	if err != nil {
-		panic(err)
-	}
-
-	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonGame}
+	return netData
 }
 
 func createGame(player *Player) {
-	conn, err := net.Dial("tcp", "localhost:9090")
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
+	netData := sendData(("{\"action\": \"createRoom\"}\n"))
 
-	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString("{\"action\": \"createRoom\"}\n")
-	if err != nil {
-		panic(err)
-	}
-
-	err = writer.Flush()
-	if err != nil {
-		panic(err)
-	}
-
-	netData, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		panic(err)
-	}
-
-	// Converts the received JSON data and converts it into a map
 	var playerData map[string]any
-	err = json.Unmarshal([]byte(netData), &playerData)
+	err := json.Unmarshal([]byte(netData), &playerData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -104,31 +71,10 @@ func createGame(player *Player) {
 }
 
 func joinGame(player *Player, roomCode string) {
-	conn, err := net.Dial("tcp", "localhost:9090")
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
+	netData := sendData(fmt.Sprintf("{\"joinRoom\": \"%s\"}\n", roomCode))
 
-	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString(fmt.Sprintf("{\"joinRoom\": \"%s\"}\n", roomCode))
-	if err != nil {
-		panic(err)
-	}
-
-	err = writer.Flush()
-	if err != nil {
-		panic(err)
-	}
-
-	netData, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		panic(err)
-	}
-
-	// Converts the received JSON data and converts it into a map
 	var playerData map[string]any
-	err = json.Unmarshal([]byte(netData), &playerData)
+	err := json.Unmarshal([]byte(netData), &playerData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -143,34 +89,14 @@ func joinGame(player *Player, roomCode string) {
 }
 
 func startGame(player Player) string {
-	conn, err := net.Dial("tcp", "localhost:9090")
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-
-	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"startGame\"}\n", player.PlayerID, player.RoomCode))
-	if err != nil {
-		panic(err)
-	}
-
-	err = writer.Flush()
-	if err != nil {
-		panic(err)
-	}
-
-	netData, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		panic(err)
-	}
-
+	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"startGame\"}\n", player.PlayerID, player.RoomCode))
 	type InitialHandDetails struct {
 		InitialHand string
 	}
+
 	var initialHandDetails InitialHandDetails
 	var handData map[string]any
-	err = json.Unmarshal([]byte(netData), &handData)
+	err := json.Unmarshal([]byte(netData), &handData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -185,35 +111,14 @@ func startGame(player Player) string {
 }
 
 func waitForGameStart(player Player) string {
-	conn, err := net.Dial("tcp", "localhost:9090")
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-
-	writer := bufio.NewWriter(conn)
-	fmt.Println(player.RoomCode)
-	_, err = writer.WriteString(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"waitingStart\"}\n", player.PlayerID, player.RoomCode))
-	if err != nil {
-		panic(err)
-	}
-
-	err = writer.Flush()
-	if err != nil {
-		panic(err)
-	}
-
-	netData, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		panic(err)
-	}
-
+	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"waitingStart\"}\n", player.PlayerID, player.RoomCode))
 	type InitialHandDetails struct {
 		InitialHand string
 	}
+
 	var initialHandDetails InitialHandDetails
 	var handData map[string]any
-	err = json.Unmarshal([]byte(netData), &handData)
+	err := json.Unmarshal([]byte(netData), &handData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -228,35 +133,15 @@ func waitForGameStart(player Player) string {
 }
 
 func requestTurn(player Player) []string {
-	conn, err := net.Dial("tcp", "localhost:9090")
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-
-	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"requestTurn\"}\n", player.RoomCode))
-	if err != nil {
-		panic(err)
-	}
-
-	err = writer.Flush()
-	if err != nil {
-		panic(err)
-	}
-
-	netData, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		panic(err)
-	}
-
+	netData := sendData(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"requestTurn\"}\n", player.RoomCode))
 	type RequestTurnDetails struct {
 		PlayerNumber int
 		TopCard      string
 	}
+
 	var requestTurnDetails RequestTurnDetails
 	var turnData map[string]any
-	err = json.Unmarshal([]byte(netData), &turnData)
+	err := json.Unmarshal([]byte(netData), &turnData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -273,35 +158,15 @@ func requestTurn(player Player) []string {
 }
 
 func waitTurn(player Player) string {
-	conn, err := net.Dial("tcp", "localhost:9090")
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-
-	writer := bufio.NewWriter(conn)
-	_, err = writer.WriteString(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"waitTurn\"}\n", player.RoomCode))
-	if err != nil {
-		panic(err)
-	}
-
-	err = writer.Flush()
-	if err != nil {
-		panic(err)
-	}
-
-	netData, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		panic(err)
-	}
-
+	netData := sendData(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"waitTurn\"}\n", player.RoomCode))
 	type GameWonDetails struct {
 		WonGame       bool
 		WinningPlayer string
 	}
+
 	var gameWonDetails GameWonDetails
 	var gameData map[string]any
-	err = json.Unmarshal([]byte(netData), &gameData)
+	err := json.Unmarshal([]byte(netData), &gameData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -320,24 +185,150 @@ func waitTurn(player Player) string {
 	}
 }
 
+func (player Player) playCard(playedCard string) []any {
+	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"playCard\": \"%s\"}\n", player.PlayerID, player.RoomCode, playedCard))
+	type RuleCheckResults struct {
+		RulesPassed bool
+		CurrentHand string
+		WonGame     bool
+	}
+
+	var ruleCheckResults RuleCheckResults
+	var ruleData map[string]any
+	err := json.Unmarshal([]byte(netData), &ruleData)
+	if err != nil {
+		fmt.Println(netData)
+		panic(err)
+	}
+
+	// Loads the JSON data into the player struct using mapstructure
+	err = mapstructure.Decode(ruleData, &ruleCheckResults)
+	if err != nil {
+		panic(err)
+	}
+
+	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonGame}
+}
+
+func printMainMenu() {
+	titleLarge := `          _____                    _____                   _______         
+         /\    \                  /\    \                 /::\    \        
+        /::\____\                /::\    \               /::::\    \       
+       /::::|   |               /::::\    \             /::::::\    \      
+      /:::::|   |              /::::::\    \           /::::::::\    \     
+     /::::::|   |             /:::/\:::\    \         /:::/~~\:::\    \    
+    /:::/|::|   |            /:::/__\:::\    \       /:::/    \:::\    \   
+   /:::/ |::|   |           /::::\   \:::\    \     /:::/    / \:::\    \  
+  /:::/  |::|___|______    /::::::\   \:::\    \   /:::/____/   \:::\____\ 
+ /:::/   |::::::::\    \  /:::/\:::\   \:::\    \ |:::|    |     |:::|    |
+/:::/    |:::::::::\____\/:::/  \:::\   \:::\____\|:::|____|     |:::|    |
+\::/    / ~~~~~/:::/    /\::/    \:::\  /:::/    / \:::\    \   /:::/    / 
+ \/____/      /:::/    /  \/____/ \:::\/:::/    /   \:::\    \ /:::/    /  
+             /:::/    /            \::::::/    /     \:::\    /:::/    /   
+            /:::/    /              \::::/    /       \:::\__/:::/    /    
+           /:::/    /               /:::/    /         \::::::::/    /     
+          /:::/    /               /:::/    /           \::::::/    /      
+         /:::/    /               /:::/    /             \::::/    /       
+        /:::/    /               /:::/    /               \::/____/        
+        \::/    /                \::/    /                 ~~              
+         \/____/                  \/____/                                  
+                                                                           `
+
+	titleMedium := `                                                      
+     ______  _______         _____           _____    
+    |      \/       \    ___|\    \     ____|\    \   
+   /          /\     \  /    /\    \   /     /\    \  
+  /     /\   / /\     ||    |  |    | /     /  \    \ 
+ /     /\ \_/ / /    /||    |__|    ||     |    |    |
+|     |  \|_|/ /    / ||    .--.    ||     |    |    |
+|     |       |    |  ||    |  |    ||\     \  /    /|
+|\____\       |____|  /|____|  |____|| \_____\/____/ |
+| |    |      |    | / |    |  |    | \ |    ||    | /
+ \|____|      |____|/  |____|  |____|  \|____||____|/ 
+    \(          )/       \(      )/       \(    )/    
+     '          '         '      '         '    '     
+                                                      `
+
+	titleSmall := ` _____ ______   ________  ________     
+|\   _ \  _   \|\   __  \|\   __  \    
+\ \  \\\__\ \  \ \  \|\  \ \  \|\  \   
+ \ \  \\|__| \  \ \   __  \ \  \\\  \  
+  \ \  \    \ \  \ \  \ \  \ \  \\\  \ 
+   \ \__\    \ \__\ \__\ \__\ \_______\
+    \|__|     \|__|\|__|\|__|\|_______|
+                                       `
+
+	titleTiny := `░█▄█░█▀█░█▀█
+░█░█░█▀█░█░█
+░▀░▀░▀░▀░▀▀▀`
+
+	titleLargeLines := strings.Split(titleLarge, "\n")
+	titleMediumLines := strings.Split(titleMedium, "\n")
+	titleSmallLines := strings.Split(titleSmall, "\n")
+	titleTinyLines := strings.Split(titleTiny, "\n")
+
+	fd := int(os.Stdout.Fd())
+	terminalWidth, _, err := term.GetSize(fd)
+	if err != nil {
+		panic(err)
+	}
+
+	var printTitle []string
+	if terminalWidth > len(titleLargeLines[0]) {
+		printTitle = titleLargeLines
+	} else if terminalWidth > len(titleMediumLines[0]) {
+		printTitle = titleMediumLines
+	} else if terminalWidth > len(titleSmallLines[0]) {
+		printTitle = titleSmallLines
+	} else {
+		printTitle = titleTinyLines
+	}
+
+	fmt.Print("\033[H\033[2J")
+	for _, line := range printTitle {
+		titlePadding := strings.Repeat(" ", (terminalWidth/2)-(utf8.RuneCountInString(line)/2))
+		fmt.Printf("%s%s\n", titlePadding, line)
+	}
+	fmt.Println("─┬" + strings.Repeat("─", terminalWidth-2))
+
+	menuOptions := []string{"Create a new room", "Join a room", "Exit"}
+	for i, menuOption := range menuOptions {
+		titlePadding := strings.Repeat(" ", (terminalWidth/2)-(utf8.RuneCountInString(menuOption)/2)-2)
+		fmt.Printf("%d│%s%s\n", i+1, titlePadding, menuOption)
+	}
+	fmt.Println("─┴" + strings.Repeat("─", terminalWidth-2))
+}
+
 func main() {
 	var player Player
 	var handList string
 
+	printMainMenu()
 	var choice string
-	fmt.Print("Press C to create the game or J to join the game: ")
-	fmt.Scan(&choice)
+	fmt.Print("Choose a menu option: ")
+	for {
+		fmt.Scan(&choice)
 
-	if choice == "C" {
+		if !slices.Contains([]string{"1", "2", "3"}, choice) {
+			printMainMenu()
+			fmt.Print("Error - please choose a valid menu option: ")
+		} else {
+			break
+		}
+	}
+
+	switch choice {
+	case "1":
 		createGame(&player)
-	} else if choice == "J" {
+		fmt.Println("Debug - Room Code: " + player.RoomCode)
+	case "2":
 		var roomCode string
 		fmt.Print("Enter a room code: ")
 		fmt.Scan(&roomCode)
 		joinGame(&player, roomCode)
+	case "3":
+		return
 	}
-
-	fmt.Println(player)
 
 	if player.CanStartGame {
 		fmt.Print("Press Y to start the game: ")
