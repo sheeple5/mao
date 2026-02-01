@@ -22,6 +22,15 @@ type Player struct {
 	RoomCode     string
 }
 
+func getTerminalWidth() int {
+	fd := int(os.Stdout.Fd())
+	terminalWidth, _, err := term.GetSize(fd)
+	if err != nil {
+		panic(err)
+	}
+	return terminalWidth
+}
+
 func sendData(payload string) string {
 	conn, err := net.Dial("tcp", "localhost:9090")
 	if err != nil {
@@ -210,7 +219,7 @@ func (player Player) playCard(playedCard string) []any {
 	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonGame}
 }
 
-func printMainMenu() {
+func printLogo() { // Should also introduce height variability as well
 	titleLarge := `          _____                    _____                   _______         
          /\    \                  /\    \                 /::\    \        
         /::\____\                /::\    \               /::::\    \       
@@ -267,13 +276,8 @@ func printMainMenu() {
 	titleSmallLines := strings.Split(titleSmall, "\n")
 	titleTinyLines := strings.Split(titleTiny, "\n")
 
-	fd := int(os.Stdout.Fd())
-	terminalWidth, _, err := term.GetSize(fd)
-	if err != nil {
-		panic(err)
-	}
-
 	var printTitle []string
+	terminalWidth := getTerminalWidth()
 	if terminalWidth > len(titleLargeLines[0]) {
 		printTitle = titleLargeLines
 	} else if terminalWidth > len(titleMediumLines[0]) {
@@ -289,6 +293,24 @@ func printMainMenu() {
 		titlePadding := strings.Repeat(" ", (terminalWidth/2)-(utf8.RuneCountInString(line)/2))
 		fmt.Printf("%s%s\n", titlePadding, line)
 	}
+}
+
+func printHeader(message string) {
+	printLogo()
+
+	terminalWidth := getTerminalWidth()
+	fmt.Println(strings.Repeat("─", terminalWidth))
+
+	if message != "" {
+		fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
+		fmt.Println(strings.Repeat("─", terminalWidth))
+	}
+}
+
+func printMainMenu() {
+	printLogo()
+
+	terminalWidth := getTerminalWidth()
 	fmt.Println("─┬" + strings.Repeat("─", terminalWidth-2))
 
 	menuOptions := []string{"Create a new room", "Join a room", "Exit"}
@@ -297,6 +319,29 @@ func printMainMenu() {
 		fmt.Printf("%d│%s%s\n", i+1, titlePadding, menuOption)
 	}
 	fmt.Println("─┴" + strings.Repeat("─", terminalWidth-2))
+}
+
+func printTurn(player Player, handList string, adjustedPlayerNumber int, turnTopCard string, message string) {
+	printHeader("")
+
+	terminalWidth := getTerminalWidth()
+	if adjustedPlayerNumber-1 == player.PlayerNumber {
+		fmt.Printf("%sYOUR TURN\n", strings.Repeat(" ", (terminalWidth/2)-4))
+	} else {
+		playerTitle := fmt.Sprintf("Player %d's turn", adjustedPlayerNumber)
+		fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(playerTitle)/2)), playerTitle)
+	}
+	fmt.Println(strings.Repeat("─", terminalWidth))
+	fmt.Printf("%sCurrent Card:\n", strings.Repeat(" ", (terminalWidth/2)-6))
+	fmt.Printf("%s%s:\n", strings.Repeat(" ", (terminalWidth/2)-1), turnTopCard)
+	fmt.Printf("%sYour Hand:\n", strings.Repeat(" ", (terminalWidth/2)-5))
+	fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(handList)/2)), handList)
+	fmt.Println(strings.Repeat("─", terminalWidth))
+
+	if message != "" {
+		fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
+		fmt.Println(strings.Repeat("─", terminalWidth))
+	}
 }
 
 func main() {
@@ -320,8 +365,9 @@ func main() {
 	switch choice {
 	case "1":
 		createGame(&player)
-		fmt.Println("Debug - Room Code: " + player.RoomCode)
 	case "2":
+		printHeader("") // Should print available rooms eventually
+
 		var roomCode string
 		fmt.Print("Enter a room code: ")
 		fmt.Scan(&roomCode)
@@ -331,17 +377,23 @@ func main() {
 	}
 
 	if player.CanStartGame {
-		fmt.Print("Press Y to start the game: ")
-		fmt.Scan(&choice)
+		for {
+			message := fmt.Sprintf("Room Code: %s", player.RoomCode)
+			printHeader(message)
+			fmt.Print("Press Y to start the game: ") // Should include an option to back out. Can I also display number of users joined?
+			fmt.Scan(&choice)
 
-		if choice == "Y" {
-			handList = startGame(player)
+			if choice == "Y" {
+				handList = startGame(player)
+				break
+			}
 		}
 	} else {
-		fmt.Println("Waiting for game to start...")
+		printHeader("Waiting for game to start...")
 		handList = waitForGameStart(player)
 	}
 
+	penaltyMessage := ""
 	for {
 		// Request turn
 		turnDetails := requestTurn(player)
@@ -351,18 +403,16 @@ func main() {
 		adjustedTurnPlayerNumber, _ := strconv.Atoi(turnPlayerNumber)
 		adjustedTurnPlayerNumber += 1
 		// If my player number equals the returned turn player, take turn. Else, wait for turn and display current hand/top card
+
+		printTurn(player, handList, adjustedTurnPlayerNumber, turnTopCard, penaltyMessage)
 		if strconv.Itoa(player.PlayerNumber) == turnPlayerNumber {
 			var playedCard string
-			fmt.Printf("Player %d's turn...\n", adjustedTurnPlayerNumber)
-			fmt.Printf("Current Card: %s\n", turnTopCard)
-			fmt.Printf("My Hand: %s\n", handList)
-
 			for {
 				fmt.Print("Choose a card to play (or 'draw' to draw): ")
 				fmt.Scan(&playedCard)
 
 				if !slices.Contains(strings.Split(handList, ", "), playedCard) && playedCard != "draw" {
-					fmt.Println("Error: The card you entered is not in hand.")
+					printTurn(player, handList, adjustedTurnPlayerNumber, turnTopCard, "Error: The card you entered is not in hand.")
 				} else {
 					break
 				}
@@ -371,7 +421,7 @@ func main() {
 			playResults := player.playCard(playedCard)
 			if wonGame, ok := playResults[2].(bool); ok {
 				if wonGame {
-					fmt.Println("Congratulations, you win!")
+					printHeader("Congratulations, you win!")
 					break
 				}
 			}
@@ -379,27 +429,26 @@ func main() {
 			if currentHand, ok := playResults[1].(string); ok {
 				if playSucceeded, ok := playResults[0].(bool); ok {
 					if playSucceeded {
-						fmt.Println("VALID")
-						fmt.Println(currentHand)
 						handList = currentHand
+						penaltyMessage = ""
 					} else {
-						fmt.Println("INVALID")
-						fmt.Println(currentHand)
 						handList = currentHand
+						penaltyMessage = "You broke a rule and incurred a penalty."
 					}
 				}
 			}
 			// send card to play. can validate user actually has card on server side now cause it's handled over there
 			// once card has actually been played and is valid, respond back with new handlist for next turn
 		} else {
-			fmt.Printf("Player %d's turn...\n", adjustedTurnPlayerNumber)
-			fmt.Printf("Current Card: %s\n", turnTopCard)
-			fmt.Printf("My Hand: %s\n", handList)
-			fmt.Println("Waiting for turn...")
+			message := "Waiting for turn..."
+			terminalWidth := getTerminalWidth()
+			fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
+			fmt.Println(strings.Repeat("─", terminalWidth))
 			winningPlayer := waitTurn(player)
 
 			if winningPlayer != "" {
-				fmt.Printf("Game over! Player %s wins.", winningPlayer)
+				message := fmt.Sprintf("Game over! Player %s wins.", winningPlayer)
+				printHeader(message)
 				break
 			}
 		}
