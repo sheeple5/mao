@@ -258,6 +258,14 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Players[newPlayer.PlayerID] = &newPlayer
 
 		sendData(conn, fmt.Appendf(nil, "{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame)))
+	case "getRooms":
+		roomCodes := []string{}
+		for roomCode, room := range rooms {
+			if !room.IsStarted {
+				roomCodes = append(roomCodes, roomCode)
+			}
+		}
+		sendData(conn, fmt.Appendf(nil, "{\"rooms\": \"%s\"}\n", strings.Join(roomCodes, " ")))
 	case "waitingStart":
 		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
 		room := rooms[actionDetails.RoomCode]

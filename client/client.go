@@ -62,7 +62,7 @@ func sendData(payload string) string {
 	return netData
 }
 
-func createGame(player *Player) {
+func createRoom(player *Player) {
 	netData := sendData(("{\"action\": \"createRoom\"}\n"))
 
 	var playerData map[string]any
@@ -79,7 +79,7 @@ func createGame(player *Player) {
 	}
 }
 
-func joinGame(player *Player, roomCode string) {
+func joinRoom(player *Player, roomCode string) {
 	netData := sendData(fmt.Sprintf("{\"action\": \"joinRoom\", \"roomCode\": \"%s\"}\n", roomCode))
 
 	var playerData map[string]any
@@ -95,6 +95,28 @@ func joinGame(player *Player, roomCode string) {
 		panic(err)
 	}
 	player.RoomCode = roomCode
+}
+
+func getRooms() string {
+	netData := sendData("{\"action\": \"getRooms\"}\n")
+	type RoomsDetails struct {
+		Rooms string
+	}
+
+	var roomsDetails RoomsDetails
+	var roomsData map[string]any
+	err := json.Unmarshal([]byte(netData), &roomsData)
+	if err != nil {
+		fmt.Println(netData)
+		panic(err)
+	}
+
+	// Loads the JSON data into the struct using mapstructure
+	err = mapstructure.Decode(roomsData, &roomsDetails)
+	if err != nil {
+		panic(err)
+	}
+	return roomsDetails.Rooms
 }
 
 func startGame(player Player) string {
@@ -364,14 +386,15 @@ func main() {
 
 	switch choice {
 	case "1":
-		createGame(&player)
+		createRoom(&player)
 	case "2":
-		printHeader("") // Should print available rooms eventually
+		roomsList := getRooms()
+		printHeader(fmt.Sprintf("Open Rooms: %s", roomsList))
 
 		var roomCode string
 		fmt.Print("Enter a room code: ")
 		fmt.Scan(&roomCode)
-		joinGame(&player, roomCode)
+		joinRoom(&player, roomCode)
 	case "3":
 		return
 	}
