@@ -1,0 +1,64 @@
+package rules
+import "strings"
+
+type Rules func(card Card, deck Deck) string
+var rules []Rules = []Rules{baseRule}
+
+type Deck struct {
+	Pile        []Card
+	DiscardPile []Card
+}
+
+type Card struct {
+	Rank  string
+	Suit  string
+	Value string
+}
+
+func convertCard(playedCard string) Card {
+	return Card{Rank: playedCard[:len(playedCard)-1], Suit: string(playedCard[len(playedCard)-1]), Value: playedCard}
+}
+
+func convertPile(pile string) []Card {
+	var newPile []Card
+	for _, card := range strings.Split(pile, ",") {
+		newPile = append(newPile, convertCard(card))
+	}
+	return newPile
+}
+
+func (deck Deck) getCurrentTop() Card {
+	return deck.DiscardPile[len(deck.DiscardPile)-1]
+}
+
+func checkRules(playedCard string, deckPile string, deckDiscard string) bool {
+	card := convertCard(playedCard)
+	deck := Deck{Pile: convertPile(deckPile), DiscardPile: convertPile(deckDiscard)}
+
+	for _, rule := range rules {
+		ruleResult := rule(card, deck)
+
+		if ruleResult == "true" {
+			return true
+		} else if ruleResult == "false" {
+			return false
+		} else if ruleResult == "continue" {
+			continue
+		} else {
+			continue
+		}
+	}
+}
+
+func baseRule(card Card, deck Deck) string {
+	currentCard := deck.getCurrentTop()
+
+	if card.Rank == currentCard.Rank {
+		return "true"
+	} else if card.Suit == currentCard.Suit {
+		return "true"
+	} else {
+		return "false"
+	}
+} 
+

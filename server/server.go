@@ -5,14 +5,18 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand/v2"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/google/uuid"
+	"github.com/traefik/yaegi/interp"
+	"github.com/traefik/yaegi/stdlib"
 )
 
 type Rules func(card Card, deck Deck) string
@@ -113,25 +117,33 @@ func rulesCheck(player Player, playedCard string, room *Room) bool {
 		return false
 	}
 
-	card := convertCard(playedCard)
-	for _, rule := range room.Rules {
-		ruleResult := rule(card, room.Deck)
-
-		if ruleResult == "true" {
-			return true
-		} else if ruleResult == "false" {
-			return false
-		} else if ruleResult == "continue" {
-			continue
-		} else {
-			continue
-		}
+	// Can probably change this to only read file on startup and when a new rule is added, not every time
+	// NEED TO SEPARATE BY ROOM. Maybe on room creation, copy from this template rules.txt and then make rules_ABCD.txt or something for the AI to update
+	// Then would obviously read from the room specific file. On game completion, delete rules file
+	content, err := os.ReadFile("rules.txt")
+	if err != nil {
+		// Log the error and exit if file reading fails
+		log.Fatal(err)
 	}
-	return true
-}
 
-func convertCard(playedCard string) Card {
-	return Card{Rank: playedCard[:len(playedCard)-1], Suit: string(playedCard[len(playedCard)-1]), Value: playedCard}
+	interpreter := interp.New(interp.Options{})
+	err = interpreter.Use(stdlib.Symbols)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = interpreter.Eval(string(content))
+	if err != nil {
+		panic(err)
+	}
+
+	converter, err := interpreter.Eval("rules.checkRules")
+	if err != nil {
+		panic(err)
+	}
+
+	rulesCheck := converter.Interface().(func(string, string, string) bool)
+	return rulesCheck(playedCard, room.Deck.listCards("pile"), room.Deck.listCards("discard"))
 }
 
 func generateRoomCode() string {
@@ -195,6 +207,22 @@ func initializeDeck() Deck {
 
 func (deck Deck) getCurrentTop() Card {
 	return deck.DiscardPile[len(deck.DiscardPile)-1]
+}
+
+func (deck Deck) listCards(pileType string) string {
+	cardValues := []string{}
+	var pile []Card
+	switch pileType {
+	case "pile":
+		pile = deck.Pile
+	case "discard":
+		pile = deck.DiscardPile
+	}
+
+	for _, card := range pile {
+		cardValues = append(cardValues, card.Value)
+	}
+	return strings.Join(cardValues, ",")
 }
 
 func shuffleCards(pile []Card) {
