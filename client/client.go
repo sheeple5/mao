@@ -22,6 +22,8 @@ type Player struct {
 	RoomCode     string
 }
 
+var serverIP string
+
 func getTerminalWidth() int {
 	fd := int(os.Stdout.Fd())
 	terminalWidth, _, err := term.GetSize(fd)
@@ -31,9 +33,32 @@ func getTerminalWidth() int {
 	return terminalWidth
 }
 
+func chooseServer() string {
+	message := ""
+
+	for {
+		printHeader(message)
+
+		fmt.Print("Enter a server IP (or exit to exit): ")
+		fmt.Scan(&serverIP)
+
+		if serverIP == "exit" {
+			return serverIP
+		}
+
+		if getHealthCheck() {
+			return serverIP
+		} else {
+			message = fmt.Sprintf("Could not connect to server %s", serverIP)
+		}
+	}
+}
+
 func sendData(payload string) string {
-	conn, err := net.Dial("tcp", "localhost:9090")
-	if err != nil {
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:9090", serverIP))
+	if err != nil && payload == "{\"action\": \"healthCheck\"}\n" {
+		return "{\"success\": false}"
+	} else if err != nil {
 		panic(err)
 	}
 
@@ -60,6 +85,34 @@ func sendData(payload string) string {
 	}
 
 	return netData
+}
+
+func getHealthCheck() bool {
+	netData := sendData("{\"action\": \"healthCheck\"}\n")
+	type HealthDetails struct {
+		Service string
+		Success bool
+	}
+
+	var healthDetails HealthDetails
+	var healthData map[string]any
+	err := json.Unmarshal([]byte(netData), &healthData)
+	if err != nil {
+		fmt.Println(netData)
+		panic(err)
+	}
+
+	// Loads the JSON data into the struct using mapstructure
+	err = mapstructure.Decode(healthData, &healthDetails)
+	if err != nil {
+		panic(err)
+	}
+
+	if healthDetails.Service == "Mao Game" && healthDetails.Success {
+		return true
+	} else {
+		return false
+	}
 }
 
 func createRoom(player *Player) {
@@ -330,9 +383,13 @@ func printHeader(message string) {
 }
 
 func printMainMenu() {
-	printLogo()
-
 	terminalWidth := getTerminalWidth()
+	serverBanner := fmt.Sprintf("Current Server: %s", serverIP)
+	serverPadding := strings.Repeat(" ", (terminalWidth/2)-(len(serverBanner)/2))
+
+	printLogo()
+	fmt.Println(strings.Repeat("─", terminalWidth))
+	fmt.Printf("%s%s\n", serverPadding, serverBanner)
 	fmt.Println("─┬" + strings.Repeat("─", terminalWidth-2))
 
 	menuOptions := []string{"Create a new room", "Join a room", "Exit"}
@@ -370,109 +427,120 @@ func main() {
 	var player Player
 	var handList string
 
-	printMainMenu()
-	var choice string
-	fmt.Print("Choose a menu option: ")
 	for {
-		fmt.Scan(&choice)
-
-		if !slices.Contains([]string{"1", "2", "3"}, choice) {
-			printMainMenu()
-			fmt.Print("Error - please choose a valid menu option: ")
-		} else {
-			break
+		if serverIP == "" {
+			chooseServer()
 		}
-	}
 
-	switch choice {
-	case "1":
-		createRoom(&player)
-	case "2":
-		roomsList := getRooms()
-		printHeader(fmt.Sprintf("Open Rooms: %s", roomsList))
+		if serverIP == "exit" {
+			return
+		}
 
-		var roomCode string
-		fmt.Print("Enter a room code: ")
-		fmt.Scan(&roomCode)
-		joinRoom(&player, roomCode)
-	case "3":
-		return
-	}
-
-	if player.CanStartGame {
+		printMainMenu()
+		var choice string
+		fmt.Print("Choose a menu option: ")
 		for {
-			message := fmt.Sprintf("Room Code: %s", player.RoomCode)
-			printHeader(message)
-			fmt.Print("Press Y to start the game: ") // Should include an option to back out. Can I also display number of users joined?
 			fmt.Scan(&choice)
 
-			if choice == "Y" {
-				handList = startGame(player)
+			if !slices.Contains([]string{"1", "2", "3"}, choice) {
+				printMainMenu()
+				fmt.Print("Error - please choose a valid menu option: ")
+			} else {
 				break
 			}
 		}
-	} else {
-		printHeader("Waiting for game to start...")
-		handList = waitForGameStart(player)
-	}
 
-	penaltyMessage := ""
-	for {
-		// Request turn
-		turnDetails := requestTurn(player)
-		turnPlayerNumber := turnDetails[0]
-		turnTopCard := turnDetails[1]
+		switch choice {
+		case "1":
+			createRoom(&player)
+		case "2":
+			roomsList := getRooms()
+			printHeader(fmt.Sprintf("Open Rooms: %s", roomsList))
 
-		adjustedTurnPlayerNumber, _ := strconv.Atoi(turnPlayerNumber)
-		adjustedTurnPlayerNumber += 1
-		// If my player number equals the returned turn player, take turn. Else, wait for turn and display current hand/top card
+			var roomCode string
+			fmt.Print("Enter a room code: ")
+			fmt.Scan(&roomCode)
+			joinRoom(&player, roomCode)
+		case "3":
+			serverIP = ""
+			continue
+		}
 
-		printTurn(player, handList, adjustedTurnPlayerNumber, turnTopCard, penaltyMessage)
-		if strconv.Itoa(player.PlayerNumber) == turnPlayerNumber {
-			var playedCard string
+		if player.CanStartGame {
 			for {
-				fmt.Print("Choose a card to play (or 'draw' to draw): ")
-				fmt.Scan(&playedCard)
+				message := fmt.Sprintf("Room Code: %s", player.RoomCode)
+				printHeader(message)
+				fmt.Print("Press Y to start the game: ") // Should include an option to back out. Can I also display number of users joined?
+				fmt.Scan(&choice)
 
-				if !slices.Contains(strings.Split(handList, ", "), playedCard) && playedCard != "draw" {
-					printTurn(player, handList, adjustedTurnPlayerNumber, turnTopCard, "Error: The card you entered is not in hand.")
-				} else {
+				if choice == "Y" {
+					handList = startGame(player)
 					break
 				}
 			}
+		} else {
+			printHeader("Waiting for game to start...")
+			handList = waitForGameStart(player)
+		}
 
-			playResults := player.playCard(playedCard)
-			if wonGame, ok := playResults[2].(bool); ok {
-				if wonGame {
-					printHeader("Congratulations, you win!")
-					break
-				}
-			}
+		penaltyMessage := ""
+		for {
+			// Request turn
+			turnDetails := requestTurn(player)
+			turnPlayerNumber := turnDetails[0]
+			turnTopCard := turnDetails[1]
 
-			if currentHand, ok := playResults[1].(string); ok {
-				if playSucceeded, ok := playResults[0].(bool); ok {
-					if playSucceeded {
-						handList = currentHand
-						penaltyMessage = ""
+			adjustedTurnPlayerNumber, _ := strconv.Atoi(turnPlayerNumber)
+			adjustedTurnPlayerNumber += 1
+			// If my player number equals the returned turn player, take turn. Else, wait for turn and display current hand/top card
+
+			printTurn(player, handList, adjustedTurnPlayerNumber, turnTopCard, penaltyMessage)
+			if strconv.Itoa(player.PlayerNumber) == turnPlayerNumber {
+				var playedCard string
+				for {
+					fmt.Print("Choose a card to play (or 'draw' to draw): ")
+					fmt.Scan(&playedCard)
+
+					if !slices.Contains(strings.Split(handList, ", "), playedCard) && playedCard != "draw" {
+						printTurn(player, handList, adjustedTurnPlayerNumber, turnTopCard, "Error: The card you entered is not in hand.")
 					} else {
-						handList = currentHand
-						penaltyMessage = "You broke a rule and incurred a penalty."
+						break
 					}
 				}
-			}
-			// send card to play. can validate user actually has card on server side now cause it's handled over there
-			// once card has actually been played and is valid, respond back with new handlist for next turn
-		} else {
-			message := "Waiting for turn..."
-			terminalWidth := getTerminalWidth()
-			fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
-			fmt.Println(strings.Repeat("─", terminalWidth))
-			winningPlayer := waitTurn(player)
 
-			if winningPlayer != "" {
-				message := fmt.Sprintf("Game over! Player %s wins.", winningPlayer)
-				printHeader(message)
-				break
+				playResults := player.playCard(playedCard)
+				if wonGame, ok := playResults[2].(bool); ok {
+					if wonGame {
+						printHeader("Congratulations, you win!")
+						break
+					}
+				}
+
+				if currentHand, ok := playResults[1].(string); ok {
+					if playSucceeded, ok := playResults[0].(bool); ok {
+						if playSucceeded {
+							handList = currentHand
+							penaltyMessage = ""
+						} else {
+							handList = currentHand
+							penaltyMessage = "You broke a rule and incurred a penalty."
+						}
+					}
+				}
+				// send card to play. can validate user actually has card on server side now cause it's handled over there
+				// once card has actually been played and is valid, respond back with new handlist for next turn
+			} else {
+				message := "Waiting for turn..."
+				terminalWidth := getTerminalWidth()
+				fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
+				fmt.Println(strings.Repeat("─", terminalWidth))
+				winningPlayer := waitTurn(player)
+
+				if winningPlayer != "" {
+					message := fmt.Sprintf("Game over! Player %s wins.", winningPlayer)
+					printHeader(message)
+					break
+				}
 			}
 		}
 	}

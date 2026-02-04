@@ -264,6 +264,8 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 	actionDetails := receiveData(conn)
 	switch actionDetails.Action {
+	case "healthCheck":
+		sendData(conn, []byte("{\"service\": \"Mao Game\", \"success\": true}\n"))
 	case "createRoom":
 		roomCode := generateRoomCode()
 		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), IsStarted: false, Players: make(map[string]*Player), Rules: []Rules{baseRule}}
