@@ -294,10 +294,11 @@ func (player Player) playCard(playedCard string) []any {
 	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonGame}
 }
 
-func addRule(player Player, newRule string) bool {
+func addRule(player Player, newRule string) string {
 	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"addRule\", \"newRule\": \"%s\"}\n", player.PlayerID, player.RoomCode, newRule))
 	type AddRuleResults struct {
-		Success bool
+		HandList string
+		Success  bool
 	}
 
 	var addRuleResults AddRuleResults
@@ -314,7 +315,7 @@ func addRule(player Player, newRule string) bool {
 		panic(err)
 	}
 
-	return addRuleResults.Success
+	return addRuleResults.HandList
 }
 
 func printLogo() { // Should also introduce height variability as well
@@ -538,9 +539,10 @@ func main() {
 						reader := bufio.NewReader(os.Stdin)
 						fmt.Print("As your reward, describe a new rule to add to the game: ")
 						newRule, _ := reader.ReadString('\n')
+						newRule = strings.TrimSpace(newRule)
 
-						addRule(player, newRule)
-						break
+						handList = addRule(player, newRule)
+						continue
 					}
 				}
 
@@ -570,7 +572,7 @@ func main() {
 
 					fmt.Printf("Waiting for player %s to add a new rule...\n", winningPlayer)
 					waitForGameStart(player)
-					break
+					continue
 				}
 			}
 		}

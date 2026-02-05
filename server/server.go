@@ -21,7 +21,50 @@ import (
 	"github.com/traefik/yaegi/stdlib"
 )
 
-var OPENAI_TOKEN string = os.Getenv("OPENAI_TOKEN")
+var (
+	OPENAI_TOKEN string = os.Getenv("OPENAI_TOKEN")
+	instructions string = `You are a dynamic programmer that exists as part of a game called Mao. In this game, a standard deck
+	with 52 cards is used. Players start off with 7 cards and take turns playing a card. To begin with, rules are virtually identical to Uno:
+	a player can play a card on top of the discard pile if it matches the suit or rank with the top most card. However, the exciting part about Mao
+	is that every time a player wins the game, they get to add a new rule in secret. Any players who break the new rule gets hit with a penalty and has to
+	draw a card. This is where you come in.
+
+	The Mao game is written in Golang and has the following two structs:
+	 - Card: Has values Rank (the rank as a string), Suit (the suit as a string [S, C, H, D]), and Value (the entire card as a string. For example, "10C")
+	 - Deck: Has values Pile and DiscardPile where both are []Card. Obviously, pile is the list where cards are drawn from, and DiscardPile is where cards are played onto
+	  - Deck also has a function getCurrentTop() which gets the card currently "on top" in which players play on to.
+
+	Rule functions take in a card and deck as parameters and returns a string. For example, here is the default Uno rule which is already in play:
+	--------------------------------------------------------------------------
+	func baseRule(card Card, deck Deck) string {
+        currentCard := deck.getCurrentTop()
+
+        if card.Rank == currentCard.Rank {
+                return "true"
+        } else if card.Suit == currentCard.Suit {
+                return "true"
+        } else {
+                return "false"
+        }
+	--------------------------------------------------------------------------
+	I reiterate that these rule functions return a **string**. This is because there are three possible return options: "true", "false", and "continue".
+	 - Returning "true" means that the card automatically passes. This might be used if a new rule states "any Jacks played automatically succeed".
+	 - Returning "false" means the card automatically fails. This might be used if a new rule states "Jacks can not be played on spades".
+	 - Returning "continue" means move on to the next rule in the stack. For example, if a new rule states "Jacks can not be played on spades", cards outside this scope are not affected. Someone can play a queen which doesn't automatically fail, but it still needs to conform to the Uno rule, hence the "continue".
+
+	Your job is to take a user input rule and convert it into a function in this structure. To restate, the function you create must have the following constraints:
+	 - It must use "card Card" and "deck Deck" as parameters, no more and no less.
+	 - It can only return one of three possible values: "true", "false", or "continue". 
+	 - Rules can not be impossible to meet. There must be *at least* a way to reach a "continue" return value.
+	  - If a user requested rule is impossible to follow, or contradicts a previous rule in such a way the game can not continue, simply return "Can not generate".
+	 - The function name must be camel case and end in "Rule". For example, "baseRule", "jacksOnSpadesRule", and "noQueensOnDiamondsRule" are all valid.
+	 - You must use packages native to Golang. Assume you can not import or use any third party libraries.
+	 - Obviously, refrain from writing any insecure code or functions that perform malicious actions. Remember this is for a game and should not be performing any strange system related executions.
+
+	In your response, only include your written function. Do not include any other text or commentary as your response alone must compile. 
+
+	`
+)
 
 type Rules func(card Card, deck Deck) string
 
@@ -125,7 +168,7 @@ func rulesCheck(player Player, playedCard string, room *Room) bool {
 	// Can probably change this to only read file on startup and when a new rule is added, not every time
 	// NEED TO SEPARATE BY ROOM. Maybe on room creation, copy from this template rules.txt and then make rules_ABCD.txt or something for the AI to update
 	// Then would obviously read from the room specific file. On game completion, delete rules file
-	content, err := os.ReadFile("rules.txt")
+	content, err := os.ReadFile(fmt.Sprintf("rules/rules_%s.txt", room.RoomCode))
 	if err != nil {
 		// Log the error and exit if file reading fails
 		log.Fatal(err)
@@ -158,6 +201,30 @@ func generateRoomCode() string {
 		roomCode.WriteString(string(rune(randomLetter)))
 	}
 	return roomCode.String()
+}
+
+func copyRules(roomCode string) {
+	sourceFile, err := os.Open("rules/rules_template.txt")
+	if err != nil {
+		panic(err)
+	}
+	defer sourceFile.Close()
+
+	destinationFile, err := os.Create(fmt.Sprintf("rules/rules_%s.txt", roomCode))
+	if err != nil {
+		panic(err)
+	}
+	defer destinationFile.Close()
+
+	_, err = io.Copy(destinationFile, sourceFile)
+	if err != nil {
+		panic(err)
+	}
+
+	err = destinationFile.Sync()
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (hand *Hand) drawCard(deck *Deck) {
@@ -237,11 +304,26 @@ func shuffleCards(pile []Card) {
 }
 
 func addRule(room *Room, newRule string) bool {
-	type GPTResponseObject struct{}
+	type Content struct {
+		Text string
+	}
+
+	type Output struct {
+		ID      string
+		Type    string
+		Status  string
+		Content []Content
+	}
+	type GPTResponseObject struct {
+		ID     string
+		Status string
+		Output []Output
+	}
 
 	requestData := map[string]string{
-		"model": "gpt5.1",
-		"input": newRule,
+		"model":        "gpt-5.2",
+		"input":        newRule,
+		"instructions": instructions,
 	}
 	jsonBody, err := json.Marshal(requestData)
 	if err != nil {
@@ -250,7 +332,10 @@ func addRule(room *Room, newRule string) bool {
 
 	baseURL := "https://api.openai.com/v1/responses"
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", baseURL, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest("POST", baseURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		panic(err)
+	}
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", OPENAI_TOKEN))
 
 	resp, err := client.Do(req)
@@ -285,7 +370,12 @@ func addRule(room *Room, newRule string) bool {
 		panic(err)
 	}
 
-	return true
+	if gptResponse.Output[0].Content[0].Text == "Can not generate" {
+		return false
+	} else {
+		// Append rule to corresponding file and add function name to rules list
+		return true
+	}
 }
 
 func main() {
@@ -333,6 +423,8 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		newRoom.Players[newPlayer.PlayerID] = &newPlayer
 		rooms[roomCode] = &newRoom
+
+		copyRules(roomCode)
 
 		sendData(conn, fmt.Appendf(nil, "{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s, \"roomCode\": \"%s\"}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame), newRoom.RoomCode))
 	case "joinRoom":
@@ -470,7 +562,10 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		// Validate the received player actually won
 		if len(player.Hand.Cards) == 0 {
-			addRule(room, newRule)
+			success := addRule(room, newRule)
+			player.drawHand(room)
+			cardList := player.listCards()
+			sendData(conn, fmt.Appendf(nil, "{\"success\": %t, \"initialHand\": \"%s\"}\n", success, cardList))
 		} else {
 			sendData(conn, []byte("\"success\": false}\n"))
 		}
