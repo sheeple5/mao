@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +20,8 @@ import (
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 )
+
+var OPENAI_TOKEN string = os.Getenv("OPENAI_TOKEN")
 
 type Rules func(card Card, deck Deck) string
 
@@ -60,6 +64,7 @@ type ActionDetails struct {
 	Action   string
 	RoomCode string
 	Card     string
+	NewRule  string
 }
 
 func sendData(conn net.Conn, payload []byte) {
@@ -231,6 +236,58 @@ func shuffleCards(pile []Card) {
 	})
 }
 
+func addRule(room *Room, newRule string) bool {
+	type GPTResponseObject struct{}
+
+	requestData := map[string]string{
+		"model": "gpt5.1",
+		"input": newRule,
+	}
+	jsonBody, err := json.Marshal(requestData)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	baseURL := "https://api.openai.com/v1/responses"
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", baseURL, bytes.NewBuffer(jsonBody))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", OPENAI_TOKEN))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			panic(err)
+		}
+	}()
+
+	body, err := io.ReadAll((resp.Body))
+	if err != nil {
+		panic(err)
+	}
+	stringBody := string(body)
+
+	// Converts the received JSON data and converts it into a map
+	var gptData map[string]any
+	err = json.Unmarshal([]byte(stringBody), &gptData)
+	if err != nil {
+		fmt.Println(stringBody)
+		panic(err)
+	}
+
+	// Loads the JSON data into the weather structs using mapstructure
+	var gptResponse GPTResponseObject
+	err = mapstructure.Decode(gptData, &gptResponse)
+	if err != nil {
+		panic(err)
+	}
+
+	return true
+}
+
 func main() {
 	rooms := make(map[string]*Room)
 
@@ -363,6 +420,8 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 					sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", cardList))
 				} else {
 					sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": true}\n", cardList))
+					room.IsStarted = false
+					room.Deck = initializeDeck()
 				}
 				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
 			} else {
@@ -403,6 +462,18 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
 		sendData(conn, []byte("{\"wonGame\": false}\n"))
+	case "addRule":
+		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
+		room := rooms[actionDetails.RoomCode]
+		player := room.Players[actionDetails.PlayerID]
+		newRule := actionDetails.NewRule
+
+		// Validate the received player actually won
+		if len(player.Hand.Cards) == 0 {
+			addRule(room, newRule)
+		} else {
+			sendData(conn, []byte("\"success\": false}\n"))
+		}
 	default:
 		fmt.Printf("Received message: %v\n", actionDetails)
 	}

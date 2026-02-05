@@ -294,6 +294,29 @@ func (player Player) playCard(playedCard string) []any {
 	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonGame}
 }
 
+func addRule(player Player, newRule string) bool {
+	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"addRule\", \"newRule\": \"%s\"}\n", player.PlayerID, player.RoomCode, newRule))
+	type AddRuleResults struct {
+		Success bool
+	}
+
+	var addRuleResults AddRuleResults
+	var ruleData map[string]any
+	err := json.Unmarshal([]byte(netData), &ruleData)
+	if err != nil {
+		fmt.Println(netData)
+		panic(err)
+	}
+
+	// Loads the JSON data into the struct using mapstructure
+	err = mapstructure.Decode(ruleData, &addRuleResults)
+	if err != nil {
+		panic(err)
+	}
+
+	return addRuleResults.Success
+}
+
 func printLogo() { // Should also introduce height variability as well
 	titleLarge := `          _____                    _____                   _______         
          /\    \                  /\    \                 /::\    \        
@@ -512,6 +535,11 @@ func main() {
 				if wonGame, ok := playResults[2].(bool); ok {
 					if wonGame {
 						printHeader("Congratulations, you win!")
+						reader := bufio.NewReader(os.Stdin)
+						fmt.Print("As your reward, describe a new rule to add to the game: ")
+						newRule, _ := reader.ReadString('\n')
+
+						addRule(player, newRule)
 						break
 					}
 				}
@@ -539,6 +567,9 @@ func main() {
 				if winningPlayer != "" {
 					message := fmt.Sprintf("Game over! Player %s wins.", winningPlayer)
 					printHeader(message)
+
+					fmt.Printf("Waiting for player %s to add a new rule...\n", winningPlayer)
+					waitForGameStart(player)
 					break
 				}
 			}
