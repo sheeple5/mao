@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -374,7 +375,30 @@ func addRule(room *Room, newRule string) bool {
 		return false
 	} else {
 		// Append rule to corresponding file and add function name to rules list
+		updateFile(room, gptResponse.Output[0].Content[0].Text)
 		return true
+	}
+}
+
+func updateFile(room *Room, gptRule string) {
+	fileName := fmt.Sprintf("rules/rules_%s.txt", room.RoomCode)
+	currentRulesBytes, err := os.ReadFile(fileName)
+	if err != nil {
+		panic(err)
+	}
+
+	currentRules := strings.Split(string(currentRulesBytes), "\n")
+	rulesSlice := currentRules[4]
+
+	re := regexp.MustCompile(`^func ([a-zA-Z0-9-]+)\(`)
+	functionName := re.FindStringSubmatch(gptRule)[1]
+	newRulesSlice := rulesSlice[0:28] + functionName + ", " + rulesSlice[28:]
+	currentRules[4] = newRulesSlice
+
+	finalFile := strings.Join(append(currentRules, strings.Split(gptRule, "\n")...), "\n") + "\n"
+	err = os.WriteFile(fileName, []byte(finalFile), 0o644)
+	if err != nil {
+		log.Fatalf("Failed to write to file: %v", err)
 	}
 }
 
