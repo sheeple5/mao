@@ -371,6 +371,8 @@ func addRule(room *Room, newRule string) bool {
 		panic(err)
 	}
 
+	fmt.Println(gptResponse)
+
 	if gptResponse.Output[0].Content[0].Text == "Can not generate" {
 		return false
 	} else {
@@ -403,6 +405,10 @@ func updateFile(room *Room, gptRule string) {
 }
 
 func main() {
+	if OPENAI_TOKEN == "" {
+		fmt.Println("Please set your OpenAI token.")
+		os.Exit(0)
+	}
 	rooms := make(map[string]*Room)
 
 	listener, err := net.Listen("tcp", ":9090")
