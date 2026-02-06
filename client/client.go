@@ -294,11 +294,10 @@ func (player Player) playCard(playedCard string) []any {
 	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonGame}
 }
 
-func addRule(player Player, newRule string) string {
+func addRule(player Player, newRule string) bool {
 	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"addRule\", \"newRule\": \"%s\"}\n", player.PlayerID, player.RoomCode, newRule))
 	type AddRuleResults struct {
-		HandList string
-		Success  bool
+		Success bool
 	}
 
 	var addRuleResults AddRuleResults
@@ -315,7 +314,7 @@ func addRule(player Player, newRule string) string {
 		panic(err)
 	}
 
-	return addRuleResults.HandList
+	return addRuleResults.Success
 }
 
 func printLogo() { // Should also introduce height variability as well
@@ -507,7 +506,7 @@ func main() {
 			handList = waitForGameStart(player)
 		}
 
-		penaltyMessage := ""
+		gameMessage := ""
 		for {
 			// Request turn
 			turnDetails := requestTurn(player)
@@ -518,7 +517,7 @@ func main() {
 			adjustedTurnPlayerNumber += 1
 			// If my player number equals the returned turn player, take turn. Else, wait for turn and display current hand/top card
 
-			printTurn(player, handList, adjustedTurnPlayerNumber, turnTopCard, penaltyMessage)
+			printTurn(player, handList, adjustedTurnPlayerNumber, turnTopCard, gameMessage)
 			if strconv.Itoa(player.PlayerNumber) == turnPlayerNumber {
 				var playedCard string
 				for {
@@ -541,7 +540,12 @@ func main() {
 						newRule, _ := reader.ReadString('\n')
 						newRule = strings.TrimSpace(newRule)
 
-						handList = addRule(player, newRule)
+						if addRule(player, newRule) {
+							gameMessage = "Rule added successfully."
+						} else {
+							gameMessage = "Your rule could not be added."
+						}
+						handList = startGame(player)
 						continue
 					}
 				}
@@ -550,10 +554,10 @@ func main() {
 					if playSucceeded, ok := playResults[0].(bool); ok {
 						if playSucceeded {
 							handList = currentHand
-							penaltyMessage = ""
+							gameMessage = ""
 						} else {
 							handList = currentHand
-							penaltyMessage = "You broke a rule and incurred a penalty."
+							gameMessage = "You broke a rule and incurred a penalty."
 						}
 					}
 				}
@@ -571,7 +575,7 @@ func main() {
 					printHeader(message)
 
 					fmt.Printf("Waiting for player %s to add a new rule...\n", winningPlayer)
-					waitForGameStart(player)
+					handList = waitForGameStart(player)
 					continue
 				}
 			}

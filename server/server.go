@@ -443,7 +443,6 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		newRoom.Cond = sync.NewCond(&newRoom.Mu)
 
 		newPlayer := Player{PlayerID: uuid.NewString(), PlayerNumber: 0, CanStartGame: true}
-		newPlayer.drawHand(&newRoom)
 
 		newRoom.Players[newPlayer.PlayerID] = &newPlayer
 		rooms[roomCode] = &newRoom
@@ -456,7 +455,6 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room := rooms[actionDetails.RoomCode]
 
 		newPlayer := Player{PlayerID: uuid.NewString(), PlayerNumber: len(room.Players), CanStartGame: false}
-		newPlayer.drawHand(room)
 
 		room.Players[newPlayer.PlayerID] = &newPlayer
 
@@ -479,6 +477,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 			room.Cond.Wait()
 		}
 
+		player.drawHand(room)
 		cardList := player.listCards()
 		sendData(conn, fmt.Appendf(nil, "{\"initialHand\": \"%s\"}\n", cardList))
 
@@ -493,6 +492,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Cond.L.Lock()
 		if player.CanStartGame {
 			room.IsStarted = true
+			player.drawHand(room)
 			cardList := player.listCards()
 			sendData(conn, fmt.Appendf(nil, "{\"initialHand\": \"%s\"}\n", cardList))
 		} else {
@@ -536,8 +536,17 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 					sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", cardList))
 				} else {
 					sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": true}\n", cardList))
+					room.PlayerTurn = player.PlayerNumber
 					room.IsStarted = false
 					room.Deck = initializeDeck()
+
+					for _, allPlayer := range room.Players {
+						allPlayer.Hand.Cards = allPlayer.Hand.Cards[:0]
+						if allPlayer.CanStartGame {
+							allPlayer.CanStartGame = false
+						}
+					}
+					player.CanStartGame = true
 				}
 				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
 			} else {
@@ -587,9 +596,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		// Validate the received player actually won
 		if len(player.Hand.Cards) == 0 {
 			success := addRule(room, newRule)
-			player.drawHand(room)
-			cardList := player.listCards()
-			sendData(conn, fmt.Appendf(nil, "{\"success\": %t, \"initialHand\": \"%s\"}\n", success, cardList))
+			sendData(conn, fmt.Appendf(nil, "{\"success\": %t}\n", success))
 		} else {
 			sendData(conn, []byte("\"success\": false}\n"))
 		}
