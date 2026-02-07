@@ -67,8 +67,6 @@ var (
 	`
 )
 
-type Rules func(card Card, deck Deck) string
-
 type Room struct {
 	RoomCode   string
 	Players    map[string]*Player
@@ -76,7 +74,7 @@ type Room struct {
 	IsStarted  bool
 	DrawTurn   int
 	PlayerTurn int
-	Rules      []Rules
+	Round      int
 	Mu         sync.Mutex
 	Cond       *sync.Cond
 }
@@ -91,6 +89,7 @@ type Player struct {
 	PlayerID     string
 	PlayerNumber int
 	CanStartGame bool
+	Wins         int
 }
 
 type Hand struct {
@@ -371,8 +370,6 @@ func addRule(room *Room, newRule string) bool {
 		panic(err)
 	}
 
-	fmt.Println(gptResponse)
-
 	if gptResponse.Output[0].Content[0].Text == "Can not generate" {
 		return false
 	} else {
@@ -402,6 +399,18 @@ func updateFile(room *Room, gptRule string) {
 	if err != nil {
 		log.Fatalf("Failed to write to file: %v", err)
 	}
+}
+
+func getWinningPlayer(room *Room) Player {
+	maxWins := 0
+	var maxPlayer Player
+	for _, allPlayer := range room.Players {
+		if allPlayer.Wins > maxWins {
+			maxWins = allPlayer.Wins
+			maxPlayer = *allPlayer
+		}
+	}
+	return maxPlayer
 }
 
 func main() {
@@ -445,7 +454,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		sendData(conn, []byte("{\"service\": \"Mao Game\", \"success\": true}\n"))
 	case "createRoom":
 		roomCode := generateRoomCode()
-		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), IsStarted: false, Players: make(map[string]*Player), Rules: []Rules{baseRule}}
+		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), IsStarted: false, Players: make(map[string]*Player), Round: 1}
 		newRoom.Cond = sync.NewCond(&newRoom.Mu)
 
 		newPlayer := Player{PlayerID: uuid.NewString(), PlayerNumber: 0, CanStartGame: true}
@@ -519,7 +528,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				player.Hand.drawCard(&room.Deck)
 
 				cardList := player.listCards()
-				sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", cardList))
+				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": \"none\"}\n", room.Round, cardList))
 				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
 			} else if rulesCheck(*player, playedCard, room) {
 				// Pop card
@@ -539,11 +548,13 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 				cardList := player.listCards()
 				if len(player.Hand.Cards) > 0 {
-					sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": false}\n", cardList))
+					room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
+					sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": \"none\"}\n", room.Round, cardList))
 				} else {
-					sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": true, \"currentHand\": \"%s\", \"wonGame\": true}\n", cardList))
+					player.Wins += 1
 					room.PlayerTurn = player.PlayerNumber
 					room.IsStarted = false
+					room.Round += 1
 					room.Deck = initializeDeck()
 
 					for _, allPlayer := range room.Players {
@@ -553,13 +564,22 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 						}
 					}
 					player.CanStartGame = true
+
+					if room.Round < 6 {
+						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": \"none\"}\n", room.Round, cardList))
+					} else {
+						winningPlayer := getWinningPlayer(room)
+
+						// Need to delete room here
+						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": \"%d\"}\n", room.Round, cardList, winningPlayer.PlayerNumber))
+					}
+					room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
 				}
-				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
 			} else {
 				player.Hand.drawCard(&room.Deck)
 
 				cardList := player.listCards()
-				sendData(conn, fmt.Appendf(nil, "{\"rulesPassed\": false, \"currentHand\": \"%s\", \"wonGame\": false}\n", cardList))
+				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": false, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": \"none\"}\n", room.Round, cardList))
 			}
 		} else {
 			sendData(conn, []byte("{\"playCard\": \"false\", \"message\": \"It is not this player's turn\"}\n"))
@@ -584,7 +604,12 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		for _, player := range room.Players {
 			if currentPlayer == player.PlayerNumber {
 				if len(player.Hand.Cards) == 0 {
-					sendData(conn, fmt.Appendf(nil, "{\"wonGame\": true, \"winningPlayer\": \"%d\"}\n", currentPlayer+1))
+					if room.Round < 6 {
+						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": \"%d\", \"winningGamePlayer\": \"none\"}\n", room.Round, currentPlayer+1))
+					} else {
+						winningPlayer := getWinningPlayer(room)
+						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": \"%d\", \"winningGamePlayer\": \"%d\"}\n", room.Round, currentPlayer+1, winningPlayer.PlayerNumber))
+					}
 				}
 				break
 			}
@@ -592,7 +617,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
-		sendData(conn, []byte("{\"wonGame\": false}\n"))
+		sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": false, \"winningGamePlayer\": \"none\"}\n", room.Round))
 	case "addRule":
 		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
 		room := rooms[actionDetails.RoomCode]

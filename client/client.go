@@ -241,11 +241,13 @@ func requestTurn(player Player) []string {
 	return []string{strconv.Itoa(requestTurnDetails.PlayerNumber), requestTurnDetails.TopCard}
 }
 
-func waitTurn(player Player) string {
+func waitTurn(player Player) []any {
 	netData := sendData(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"waitTurn\"}\n", player.RoomCode))
 	type GameWonDetails struct {
-		WonGame       bool
-		WinningPlayer string
+		WonRound           bool
+		WinningRoundPlayer string
+		WinningGamePlayer  string
+		Round              int
 	}
 
 	var gameWonDetails GameWonDetails
@@ -262,11 +264,7 @@ func waitTurn(player Player) string {
 		panic(err)
 	}
 
-	if gameWonDetails.WonGame {
-		return gameWonDetails.WinningPlayer
-	} else {
-		return ""
-	}
+	return []any{gameWonDetails.WonRound, gameWonDetails.WinningRoundPlayer, gameWonDetails.WinningGamePlayer, gameWonDetails.Round}
 }
 
 func (player Player) playCard(playedCard string) []any {
@@ -274,7 +272,9 @@ func (player Player) playCard(playedCard string) []any {
 	type RuleCheckResults struct {
 		RulesPassed bool
 		CurrentHand string
-		WonGame     bool
+		WonRound    bool
+		Winner      string
+		Round       int
 	}
 
 	var ruleCheckResults RuleCheckResults
@@ -291,7 +291,7 @@ func (player Player) playCard(playedCard string) []any {
 		panic(err)
 	}
 
-	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonGame}
+	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonRound, ruleCheckResults.Winner, ruleCheckResults.Round}
 }
 
 func addRule(player Player, newRule string) bool {
@@ -532,21 +532,34 @@ func main() {
 				}
 
 				playResults := player.playCard(playedCard)
-				if wonGame, ok := playResults[2].(bool); ok {
-					if wonGame {
-						printHeader("Congratulations, you win!")
-						reader := bufio.NewReader(os.Stdin)
-						fmt.Print("As your reward, describe a new rule to add to the game: ")
-						newRule, _ := reader.ReadString('\n')
-						newRule = strings.TrimSpace(newRule)
-
-						if addRule(player, newRule) {
-							gameMessage = "Rule added successfully."
+				if winner, ok := playResults[3].(string); ok {
+					if winner != "none" {
+						if winner == strconv.Itoa(player.PlayerNumber) {
+							printHeader("You won the game!")
 						} else {
-							gameMessage = "Your rule could not be added."
+							printHeader(fmt.Sprintf("Game Over. Player %s wins!", winner))
 						}
-						handList = startGame(player)
-						continue
+						break
+					}
+				}
+
+				if wonRound, ok := playResults[2].(bool); ok {
+					if wonRound {
+						if round, ok := playResults[4].(int); ok {
+							printHeader(fmt.Sprintf("You won Round %d!", round))
+							reader := bufio.NewReader(os.Stdin)
+							fmt.Print("As your reward, describe a new rule to add to the game: ")
+							newRule, _ := reader.ReadString('\n')
+							newRule = strings.TrimSpace(newRule)
+
+							if addRule(player, newRule) {
+								gameMessage = "Rule added successfully."
+							} else {
+								gameMessage = "Your rule could not be added."
+							}
+							handList = startGame(player)
+							continue
+						}
 					}
 				}
 
@@ -568,15 +581,32 @@ func main() {
 				terminalWidth := getTerminalWidth()
 				fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
 				fmt.Println(strings.Repeat("─", terminalWidth))
-				winningPlayer := waitTurn(player)
+				playResults := waitTurn(player)
 
-				if winningPlayer != "" {
-					message := fmt.Sprintf("Game over! Player %s wins.", winningPlayer)
-					printHeader(message)
+				if winner, ok := playResults[3].(string); ok {
+					if winner != "none" {
+						if winner == strconv.Itoa(player.PlayerNumber) {
+							printHeader("You won the game!")
+						} else {
+							printHeader(fmt.Sprintf("Game Over. Player %s wins!", winner))
+						}
+						break
+					}
+				}
 
-					fmt.Printf("Waiting for player %s to add a new rule...\n", winningPlayer)
-					handList = waitForGameStart(player)
-					continue
+				if wonRound, ok := playResults[0].(bool); ok {
+					if wonRound {
+						if winningPlayer, ok := playResults[1].(string); ok {
+							if round, ok := playResults[4].(int); ok {
+								message := fmt.Sprintf("Player %s won Round %d.", winningPlayer, round)
+								printHeader(message)
+
+								fmt.Printf("Waiting for player %s to add a new rule...\n", winningPlayer)
+								handList = waitForGameStart(player)
+								continue
+							}
+						}
+					}
 				}
 			}
 		}
