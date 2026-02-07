@@ -581,7 +581,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 						// Need to delete room here
 						deleteRoom(rooms, room)
-						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": \"%d\"}\n", room.Round, cardList, winningPlayer.PlayerNumber+1))
+						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": \"%d\"}\n", room.Round, cardList, winningPlayer.PlayerNumber)
 					}
 					room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
 				}
@@ -618,7 +618,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": \"%d\", \"winningGamePlayer\": \"none\"}\n", room.Round, currentPlayer+1))
 					} else {
 						winningPlayer := getWinningPlayer(room)
-						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": \"%d\", \"winningGamePlayer\": \"%d\"}\n", room.Round, currentPlayer+1, winningPlayer.PlayerNumber+1))
+						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": \"%d\", \"winningGamePlayer\": \"%d\"}\n", room.Round, currentPlayer+1, winningPlayer.PlayerNumber))
 					}
 				}
 				break

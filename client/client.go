@@ -537,7 +537,12 @@ func main() {
 						if winner == strconv.Itoa(player.PlayerNumber) {
 							printHeader("You won the game!")
 						} else {
-							printHeader(fmt.Sprintf("Game Over. Player %s wins!", winner))
+							adjustedWinner, err := strconv.Atoi(winner)
+							if err != nil {
+								panic(err)
+							}
+							adjustedWinner += 1
+							printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner))
 						}
 						break
 					}
@@ -588,7 +593,12 @@ func main() {
 						if winner == strconv.Itoa(player.PlayerNumber) {
 							printHeader("You won the game!")
 						} else {
-							printHeader(fmt.Sprintf("Game Over. Player %s wins!", winner))
+							adjustedWinner, err := strconv.Atoi(winner)
+							if err != nil {
+								panic(err)
+							}
+							adjustedWinner += 1
+							printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner))
 						}
 						break
 					}
