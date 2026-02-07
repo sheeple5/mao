@@ -583,7 +583,7 @@ func main() {
 				fmt.Println(strings.Repeat("─", terminalWidth))
 				playResults := waitTurn(player)
 
-				if winner, ok := playResults[3].(string); ok {
+				if winner, ok := playResults[2].(string); ok {
 					if winner != "none" {
 						if winner == strconv.Itoa(player.PlayerNumber) {
 							printHeader("You won the game!")
@@ -597,7 +597,7 @@ func main() {
 				if wonRound, ok := playResults[0].(bool); ok {
 					if wonRound {
 						if winningPlayer, ok := playResults[1].(string); ok {
-							if round, ok := playResults[4].(int); ok {
+							if round, ok := playResults[3].(int); ok {
 								message := fmt.Sprintf("Player %s won Round %d.", winningPlayer, round)
 								printHeader(message)
 
