@@ -248,6 +248,7 @@ func waitTurn(player Player) []any {
 		WinningRoundPlayer string
 		WinningGamePlayer  string
 		Round              int
+		Stats              map[string]int
 	}
 
 	var gameWonDetails GameWonDetails
@@ -264,7 +265,7 @@ func waitTurn(player Player) []any {
 		panic(err)
 	}
 
-	return []any{gameWonDetails.WonRound, gameWonDetails.WinningRoundPlayer, gameWonDetails.WinningGamePlayer, gameWonDetails.Round}
+	return []any{gameWonDetails.WonRound, gameWonDetails.WinningRoundPlayer, gameWonDetails.WinningGamePlayer, gameWonDetails.Round, gameWonDetails.Stats}
 }
 
 func (player Player) playCard(playedCard string) []any {
@@ -275,6 +276,7 @@ func (player Player) playCard(playedCard string) []any {
 		WonRound    bool
 		Winner      string
 		Round       int
+		Stats       map[string]int
 	}
 
 	var ruleCheckResults RuleCheckResults
@@ -291,7 +293,7 @@ func (player Player) playCard(playedCard string) []any {
 		panic(err)
 	}
 
-	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonRound, ruleCheckResults.Winner, ruleCheckResults.Round}
+	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonRound, ruleCheckResults.Winner, ruleCheckResults.Round, ruleCheckResults.Stats}
 }
 
 func addRule(player Player, newRule string) bool {
@@ -315,6 +317,29 @@ func addRule(player Player, newRule string) bool {
 	}
 
 	return addRuleResults.Success
+}
+
+func getStats(player Player) map[string]int {
+	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"getStats\"}\n", player.PlayerID, player.RoomCode))
+	type Stats struct {
+		Stats map[string]int
+	}
+
+	var stats Stats
+	var statsData map[string]any
+	err := json.Unmarshal([]byte(netData), &statsData)
+	if err != nil {
+		fmt.Println(netData)
+		panic(err)
+	}
+
+	// Loads the JSON data into the struct using mapstructure
+	err = mapstructure.Decode(statsData, &stats)
+	if err != nil {
+		panic(err)
+	}
+
+	return stats.Stats
 }
 
 func printLogo() { // Should also introduce height variability as well
@@ -446,6 +471,19 @@ func printTurn(player Player, handList string, adjustedPlayerNumber int, turnTop
 	}
 }
 
+func printStats(stats map[string]int) {
+	terminalWidth := getTerminalWidth()
+	for playerNumber, numWins := range stats {
+		intPlayerNumber, err := strconv.Atoi(playerNumber)
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Printf("Player %d: %d wins\n", intPlayerNumber+1, numWins)
+	}
+	fmt.Println(strings.Repeat("─", terminalWidth))
+}
+
 func main() {
 	var player Player
 	var handList string
@@ -533,18 +571,24 @@ func main() {
 
 				playResults := player.playCard(playedCard)
 				if winner, ok := playResults[3].(string); ok {
-					if winner != "none" {
-						if winner == strconv.Itoa(player.PlayerNumber) {
-							printHeader("You won the game!")
-						} else {
-							adjustedWinner, err := strconv.Atoi(winner)
-							if err != nil {
-								panic(err)
+					if winner != "" {
+						if stats, ok := playResults[5].(map[string]int); ok {
+							if winner == strconv.Itoa(player.PlayerNumber) {
+								printHeader("You won the game!")
+							} else {
+								adjustedWinner, err := strconv.Atoi(winner)
+								if err != nil {
+									panic(err)
+								}
+								adjustedWinner += 1
+								printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner))
 							}
-							adjustedWinner += 1
-							printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner))
+							printStats(stats)
+							var confirm string
+							fmt.Print("Press Y to leave the game: ")
+							fmt.Scan(&confirm)
+							break
 						}
-						break
 					}
 				}
 
@@ -552,6 +596,8 @@ func main() {
 					if wonRound {
 						if round, ok := playResults[4].(int); ok {
 							printHeader(fmt.Sprintf("You won Round %d!", round))
+							printStats(getStats(player))
+
 							reader := bufio.NewReader(os.Stdin)
 							fmt.Print("As your reward, describe a new rule to add to the game: ")
 							newRule, _ := reader.ReadString('\n')
@@ -589,18 +635,24 @@ func main() {
 				playResults := waitTurn(player)
 
 				if winner, ok := playResults[2].(string); ok {
-					if winner != "none" {
-						if winner == strconv.Itoa(player.PlayerNumber) {
-							printHeader("You won the game!")
-						} else {
-							adjustedWinner, err := strconv.Atoi(winner)
-							if err != nil {
-								panic(err)
+					if winner != "" {
+						if stats, ok := playResults[4].(map[string]int); ok {
+							if winner == strconv.Itoa(player.PlayerNumber) {
+								printHeader("You won the game!")
+							} else {
+								adjustedWinner, err := strconv.Atoi(winner)
+								if err != nil {
+									panic(err)
+								}
+								adjustedWinner += 1
+								printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner))
 							}
-							adjustedWinner += 1
-							printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner))
+							printStats(stats)
+							var confirm string
+							fmt.Print("Press Y to leave the game: ")
+							fmt.Scan(&confirm)
+							break
 						}
-						break
 					}
 				}
 
@@ -610,6 +662,7 @@ func main() {
 							if round, ok := playResults[3].(int); ok {
 								message := fmt.Sprintf("Player %s won Round %d.", winningPlayer, round)
 								printHeader(message)
+								printStats(getStats(player))
 
 								fmt.Printf("Waiting for player %s to add a new rule...\n", winningPlayer)
 								handList = waitForGameStart(player)
