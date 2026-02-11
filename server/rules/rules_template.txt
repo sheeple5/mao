@@ -20,6 +20,10 @@ func convertCard(playedCard string) Card {
 }
 
 func convertPile(pile string) []Card {
+  if pile == "" {
+    return []Card{}
+  }
+
 	var newPile []Card
 	for _, card := range strings.Split(pile, ",") {
 		newPile = append(newPile, convertCard(card))

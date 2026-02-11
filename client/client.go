@@ -115,8 +115,118 @@ func getHealthCheck() bool {
 	}
 }
 
-func createRoom(player *Player) {
-	netData := sendData(("{\"action\": \"createRoom\"}\n"))
+func printRoomMenu(isPrivate bool, numRounds int, handSize int, message string) {
+	terminalWidth := getTerminalWidth()
+	printHeader("Room Options")
+
+	var publicOption string
+	if isPrivate {
+		publicOption = "Private"
+	} else {
+		publicOption = "Public"
+	}
+	fmt.Printf("1. Set Public/Private: %s\n", publicOption)
+	fmt.Printf("2. Change Number of Rounds: %d\n", numRounds)
+	fmt.Printf("3. Change Initial Hand Size: %d\n", handSize)
+	fmt.Println("--------------------")
+	fmt.Println("C. Create room")
+	fmt.Println("E. Return to main menu")
+	fmt.Println(strings.Repeat("─", terminalWidth))
+
+	if message != "" {
+		fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
+		fmt.Println(strings.Repeat("─", terminalWidth))
+	}
+}
+
+func roomOptions(isPrivate *bool, numRounds *int, handSize *int) bool {
+	choice := ""
+	errorMessage := ""
+
+	for {
+		printRoomMenu(*isPrivate, *numRounds, *handSize, errorMessage)
+		fmt.Printf("Choose a menu option: ")
+		fmt.Scan(&choice)
+
+		if !slices.Contains([]string{"1", "2", "3", "C", "E"}, choice) {
+			errorMessage = "Invalid menu option selected."
+			continue
+		} else {
+			errorMessage = ""
+		}
+
+		switch choice {
+		case "C":
+			return true
+		case "E":
+			return false
+		case "1":
+			var privateChoice string
+
+			for {
+				printHeader("Set Public/Private")
+				fmt.Print("Choose Public or Private: ")
+				fmt.Scan(&privateChoice)
+
+				if privateChoice != "public" && privateChoice != "private" {
+					continue
+				}
+
+				switch privateChoice {
+				case "public":
+					*isPrivate = false
+				case "private":
+					*isPrivate = true
+				}
+				break
+			}
+		case "2":
+			var inputRounds string
+
+			for {
+				printHeader("Set Number of Rounds")
+				fmt.Print("Enter the number of rounds to play: ")
+				fmt.Scan(&inputRounds)
+
+				intRounds, err := strconv.Atoi(inputRounds)
+				if err != nil {
+					continue
+				}
+
+				if intRounds >= 1 && intRounds <= 10 {
+					*numRounds = intRounds
+					break
+				} else {
+					continue
+				}
+			}
+		case "3":
+			var inputHand string
+
+			for {
+				printHeader("Set Initial Hand Size")
+				fmt.Print("Enter the number of cards to start the game with: ")
+				fmt.Scan(&inputHand)
+
+				intHand, err := strconv.Atoi(inputHand)
+				if err != nil {
+					continue
+				}
+
+				if intHand >= 1 && intHand <= 15 {
+					*handSize = intHand
+					break
+				} else {
+					continue
+				}
+			}
+		}
+
+	}
+}
+
+func createRoom(player *Player, isPrivate bool, numRounds int, handSize int) {
+	netData := sendData(fmt.Sprintf("{\"action\": \"createRoom\", \"isPrivate\": %t, \"numRounds\": %d, \"handSize\": %d}\n", isPrivate, numRounds, handSize))
 
 	var playerData map[string]any
 	err := json.Unmarshal([]byte(netData), &playerData)
@@ -460,7 +570,7 @@ func printTurn(player Player, handList string, adjustedPlayerNumber int, turnTop
 	}
 	fmt.Println(strings.Repeat("─", terminalWidth))
 	fmt.Printf("%sCurrent Card:\n", strings.Repeat(" ", (terminalWidth/2)-6))
-	fmt.Printf("%s%s:\n", strings.Repeat(" ", (terminalWidth/2)-1), turnTopCard)
+	fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-1), turnTopCard)
 	fmt.Printf("%sYour Hand:\n", strings.Repeat(" ", (terminalWidth/2)-5))
 	fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(handList)/2)), handList)
 	fmt.Println(strings.Repeat("─", terminalWidth))
@@ -513,7 +623,17 @@ func main() {
 
 		switch choice {
 		case "1":
-			createRoom(&player)
+			isPrivate := false
+			numRounds := 5
+			handSize := 7
+
+			doCreate := roomOptions(&isPrivate, &numRounds, &handSize)
+
+			if doCreate {
+				createRoom(&player, isPrivate, numRounds, handSize)
+			} else {
+				continue
+			}
 		case "2":
 			roomsList := getRooms()
 			printHeader(fmt.Sprintf("Open Rooms: %s", roomsList))

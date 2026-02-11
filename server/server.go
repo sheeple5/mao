@@ -72,7 +72,9 @@ type Room struct {
 	RoomCode   string
 	Players    map[string]*Player
 	Deck       Deck
+	HandSize   int
 	IsStarted  bool
+	IsPrivate  bool
 	DrawTurn   int
 	PlayerTurn int
 	Round      int
@@ -105,11 +107,14 @@ type Card struct {
 }
 
 type ActionDetails struct {
-	PlayerID string
-	Action   string
-	RoomCode string
-	Card     string
-	NewRule  string
+	PlayerID  string
+	Action    string
+	RoomCode  string
+	Card      string
+	NewRule   string
+	IsPrivate bool
+	NumRounds int
+	HandSize  int
 }
 
 func sendData(conn net.Conn, payload []byte) {
@@ -245,11 +250,11 @@ func (hand *Hand) drawCard(deck *Deck) {
 }
 
 func (player *Player) drawHand(room *Room) {
-	hand := make([]Card, 7)
-	copy(hand, room.Deck.Pile[:7])
+	hand := make([]Card, room.HandSize)
+	copy(hand, room.Deck.Pile[:room.HandSize])
 
 	player.Hand.Cards = hand
-	room.Deck.Pile = room.Deck.Pile[7:]
+	room.Deck.Pile = room.Deck.Pile[room.HandSize:]
 }
 
 func (player Player) listCards() string {
@@ -482,7 +487,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		sendData(conn, fmt.Appendf(nil, "{\"stats\": {%s}}\n", strings.Join(playerStats, ", ")))
 	case "createRoom":
 		roomCode := generateRoomCode()
-		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), IsStarted: false, Players: make(map[string]*Player), Round: 0, RoundCount: 2}
+		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), HandSize: actionDetails.HandSize, IsStarted: false, Players: make(map[string]*Player), IsPrivate: actionDetails.IsPrivate, Round: 0, RoundCount: actionDetails.NumRounds}
 		newRoom.Cond = sync.NewCond(&newRoom.Mu)
 
 		newPlayer := Player{PlayerID: uuid.NewString(), PlayerNumber: 0, CanStartGame: true}
@@ -505,7 +510,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 	case "getRooms":
 		roomCodes := []string{}
 		for roomCode, room := range rooms {
-			if !room.IsStarted {
+			if !room.IsStarted && !room.IsPrivate {
 				roomCodes = append(roomCodes, roomCode)
 			}
 		}
