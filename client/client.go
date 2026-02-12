@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +23,10 @@ type Player struct {
 	RoomCode     string
 }
 
-var serverIP string
+var (
+	player   Player
+	serverIP string
+)
 
 func getTerminalWidth() int {
 	fd := int(os.Stdout.Fd())
@@ -258,6 +262,10 @@ func joinRoom(player *Player, roomCode string) {
 		panic(err)
 	}
 	player.RoomCode = roomCode
+}
+
+func leaveRoom(player Player) {
+	_ = sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"leaveRoom\"}\n", player.PlayerID, player.RoomCode))
 }
 
 func getRooms() string {
@@ -595,7 +603,17 @@ func printStats(stats map[string]int) {
 }
 
 func main() {
-	var player Player
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		for sig := range c {
+			if sig.String() == "interrupt" {
+				leaveRoom(player)
+				os.Exit(0)
+			}
+		}
+	}()
+
 	var handList string
 
 	for {
@@ -682,11 +700,16 @@ func main() {
 					fmt.Print("Choose a card to play (or 'draw' to draw): ")
 					fmt.Scan(&playedCard)
 
-					if !slices.Contains(strings.Split(handList, ", "), playedCard) && playedCard != "draw" {
+					if !slices.Contains(strings.Split(handList, ", "), playedCard) && playedCard != "draw" && playedCard != "leave" {
 						printTurn(player, handList, adjustedTurnPlayerNumber, turnTopCard, "Error: The card you entered is not in hand.")
 					} else {
 						break
 					}
+				}
+
+				if playedCard == "leave" {
+					leaveRoom(player)
+					break
 				}
 
 				playResults := player.playCard(playedCard)

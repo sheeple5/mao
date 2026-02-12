@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -408,6 +410,20 @@ func updateFile(room *Room, gptRule string) {
 	}
 }
 
+func leaveRoom(rooms map[string]*Room, room *Room, player Player) {
+	room.Cond.L.Lock()
+	room.PlayerTurn = getNextTurn(room)
+	room.Cond.Signal()
+	room.Cond.L.Unlock()
+
+	room.Deck.Pile = append(room.Deck.Pile, player.Hand.Cards...)
+	delete(room.Players, player.PlayerID)
+
+	if len(room.Players) == 0 {
+		deleteRoom(rooms, room)
+	}
+}
+
 func deleteRoom(rooms map[string]*Room, room *Room) {
 	err := os.Remove(fmt.Sprintf("rules/rules_%s.txt", room.RoomCode))
 	if err != nil {
@@ -435,6 +451,17 @@ func getWinningPlayer(room *Room) (Player, error) {
 	} else {
 		return maxPlayer, errors.New("Tied winners")
 	}
+}
+
+func getNextTurn(room *Room) int {
+	var playerNumbers []int
+	for _, player := range room.Players {
+		playerNumbers = append(playerNumbers, player.PlayerNumber)
+	}
+	sort.Ints(playerNumbers)
+
+	playerPosition := (slices.Index(playerNumbers, room.PlayerTurn) + 1) % len(room.Players)
+	return playerNumbers[playerPosition]
 }
 
 func main() {
@@ -507,6 +534,14 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Players[newPlayer.PlayerID] = &newPlayer
 
 		sendData(conn, fmt.Appendf(nil, "{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame)))
+	case "leaveRoom":
+		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room, and room exists)
+		room := rooms[actionDetails.RoomCode]
+		player := room.Players[actionDetails.PlayerID]
+
+		leaveRoom(rooms, room, *player)
+
+		sendData(conn, []byte("{\"action\": \"leftRoom\", \"success\": true}\n"))
 	case "getRooms":
 		roomCodes := []string{}
 		for roomCode, room := range rooms {
@@ -562,7 +597,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 				cardList := player.listCards()
 				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false}\n", room.Round, cardList))
-				room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
+				room.PlayerTurn = getNextTurn(room)
 			} else if rulesCheck(*player, playedCard, room) {
 				// Pop card
 				var popIndex int
@@ -581,11 +616,10 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 				cardList := player.listCards()
 				if len(player.Hand.Cards) > 0 {
-					room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
 					sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false}\n", room.Round, cardList))
 				} else {
 					player.Wins += 1
-					room.PlayerTurn = player.PlayerNumber
+					room.PlayerTurn = getNextTurn(room)
 					room.IsStarted = false
 					room.Round += 1
 					room.Deck = initializeDeck()
@@ -617,8 +651,8 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": \"%d\", \"stats\": {%s}}\n", room.Round, cardList, winningPlayer.PlayerNumber, strings.Join(playerStats, ", ")))
 						}
 					}
-					room.PlayerTurn = (room.PlayerTurn + 1) % len(room.Players) // Will need to change this to cycling through a slice for if a player leaves the room
 				}
+				room.PlayerTurn = getNextTurn(room)
 			} else {
 				player.Hand.drawCard(&room.Deck)
 
