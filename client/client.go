@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -653,13 +654,33 @@ func main() {
 				continue
 			}
 		case "2":
-			roomsList := getRooms()
-			printHeader(fmt.Sprintf("Open Rooms: %s", roomsList))
+			exitBreak := false
+			for {
+				roomsList := getRooms()
+				printHeader(fmt.Sprintf("Open Rooms: %s", roomsList))
 
-			var roomCode string
-			fmt.Print("Enter a room code: ")
-			fmt.Scan(&roomCode)
-			joinRoom(&player, roomCode)
+				var roomCode string
+				fmt.Print("Enter a room code: ")
+				fmt.Scan(&roomCode)
+
+				match, err := regexp.MatchString(`[A-Z]{4}`, roomCode)
+				if err != nil {
+					panic(err)
+				}
+
+				if roomCode == "exit" {
+					exitBreak = true
+					break
+				} else if !match {
+					continue
+				}
+				joinRoom(&player, roomCode)
+				break
+			}
+
+			if exitBreak {
+				continue
+			}
 		case "3":
 			serverIP = ""
 			continue
