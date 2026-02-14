@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -148,19 +149,6 @@ func receiveData(conn net.Conn) ActionDetails {
 	return actionDetails
 }
 
-// The base "UNO" rule
-func baseRule(card Card, deck Deck) string {
-	currentCard := deck.getCurrentTop()
-
-	if card.Rank == currentCard.Rank {
-		return "true"
-	} else if card.Suit == currentCard.Suit {
-		return "true"
-	} else {
-		return "false"
-	}
-}
-
 func rulesCheck(player Player, playedCard string, room *Room) bool {
 	// Check if card is actually in hand
 	foundCard := false
@@ -175,8 +163,6 @@ func rulesCheck(player Player, playedCard string, room *Room) bool {
 	}
 
 	// Can probably change this to only read file on startup and when a new rule is added, not every time
-	// NEED TO SEPARATE BY ROOM. Maybe on room creation, copy from this template rules.txt and then make rules_ABCD.txt or something for the AI to update
-	// Then would obviously read from the room specific file. On game completion, delete rules file
 	content, err := os.ReadFile(fmt.Sprintf("rules/rules_%s.txt", room.RoomCode))
 	if err != nil {
 		// Log the error and exit if file reading fails
@@ -412,7 +398,9 @@ func updateFile(room *Room, gptRule string) {
 
 func leaveRoom(rooms map[string]*Room, room *Room, player Player) {
 	room.Cond.L.Lock()
-	room.PlayerTurn = getNextTurn(room)
+	if player.PlayerNumber == room.PlayerTurn {
+		room.PlayerTurn = getNextTurn(room)
+	}
 	room.Cond.Signal()
 	room.Cond.L.Unlock()
 
@@ -449,8 +437,22 @@ func getWinningPlayer(room *Room) (Player, error) {
 	if maxCount == 1 {
 		return maxPlayer, nil
 	} else {
-		return maxPlayer, errors.New("Tied winners")
+		return maxPlayer, errors.New("tied winners")
 	}
+}
+
+func getRoom(rooms map[string]*Room, roomCode string) (*Room, error) {
+	if !slices.Contains(slices.Collect(maps.Keys(rooms)), roomCode) {
+		return nil, errors.New("room not found")
+	}
+	return rooms[roomCode], nil
+}
+
+func getPlayer(room *Room, playerID string) (*Player, error) {
+	if !slices.Contains(slices.Collect(maps.Keys(room.Players)), playerID) {
+		return nil, errors.New("player not found in this room")
+	}
+	return room.Players[playerID], nil
 }
 
 func getNextTurn(room *Room) int {
@@ -504,8 +506,11 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 	case "healthCheck":
 		sendData(conn, []byte("{\"service\": \"Mao Game\", \"success\": true}\n"))
 	case "getStats":
-		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
-		room := rooms[actionDetails.RoomCode]
+		room, err := getRoom(rooms, actionDetails.RoomCode)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"getStats\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
 
 		var playerStats []string
 		for _, player := range room.Players {
@@ -526,18 +531,30 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		sendData(conn, fmt.Appendf(nil, "{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s, \"roomCode\": \"%s\"}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame), newRoom.RoomCode))
 	case "joinRoom":
-		// Need to validate room code is valid
+		if !slices.Contains(slices.Collect(maps.Keys(rooms)), actionDetails.RoomCode) {
+			sendData(conn, []byte("{\"action\": \"joinRoom\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
+
 		room := rooms[actionDetails.RoomCode]
 
 		newPlayer := Player{PlayerID: uuid.NewString(), PlayerNumber: len(room.Players), CanStartGame: false}
 
 		room.Players[newPlayer.PlayerID] = &newPlayer
 
-		sendData(conn, fmt.Appendf(nil, "{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame)))
+		sendData(conn, fmt.Appendf(nil, "{\"action\": \"joinRoom\", \"success\": true, \"player\": {\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s}}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame)))
 	case "leaveRoom":
-		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room, and room exists)
-		room := rooms[actionDetails.RoomCode]
-		player := room.Players[actionDetails.PlayerID]
+		room, err := getRoom(rooms, actionDetails.RoomCode)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"leftRoom\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
+
+		player, err := getPlayer(room, actionDetails.PlayerID)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"leftRoom\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			return
+		}
 
 		leaveRoom(rooms, room, *player)
 
@@ -551,9 +568,17 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		}
 		sendData(conn, fmt.Appendf(nil, "{\"rooms\": \"%s\"}\n", strings.Join(roomCodes, " ")))
 	case "waitingStart":
-		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
-		room := rooms[actionDetails.RoomCode]
-		player := room.Players[actionDetails.PlayerID]
+		room, err := getRoom(rooms, actionDetails.RoomCode)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"waitingStart\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
+
+		player, err := getPlayer(room, actionDetails.PlayerID)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"waitingStart\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			return
+		}
 
 		room.Cond.L.Lock()
 		for !room.IsStarted {
@@ -567,9 +592,17 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
 	case "startGame":
-		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
-		room := rooms[actionDetails.RoomCode]
-		player := room.Players[actionDetails.PlayerID]
+		room, err := getRoom(rooms, actionDetails.RoomCode)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"startGame\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
+
+		player, err := getPlayer(room, actionDetails.PlayerID)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"startGame\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			return
+		}
 
 		// Checks to see if the given player can start the game and, if so, does so
 		room.Cond.L.Lock()
@@ -585,11 +618,19 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
 	case "playCard":
-		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
-		room := rooms[actionDetails.RoomCode]
-		player := room.Players[actionDetails.PlayerID]
-		playedCard := actionDetails.Card
+		room, err := getRoom(rooms, actionDetails.RoomCode)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"playCard\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
 
+		player, err := getPlayer(room, actionDetails.PlayerID)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"playCard\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			return
+		}
+
+		playedCard := actionDetails.Card
 		room.Cond.L.Lock()
 		if player.PlayerNumber == room.PlayerTurn {
 			if playedCard == "draw" {
@@ -666,14 +707,21 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
 	case "requestTurn":
-		// Need to validate roomCode
-		room := rooms[actionDetails.RoomCode]
+		room, err := getRoom(rooms, actionDetails.RoomCode)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"requestTurn\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
+
 		sendData(conn, fmt.Appendf(nil, "{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().Value))
 	case "waitTurn":
-		// Need to validate roomCode
-		room := rooms[actionDetails.RoomCode]
-		currentPlayer := room.PlayerTurn
+		room, err := getRoom(rooms, actionDetails.RoomCode)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"waitTurn\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
 
+		currentPlayer := room.PlayerTurn
 		room.Cond.L.Lock()
 		for currentPlayer == room.PlayerTurn {
 			room.Cond.Wait()
@@ -707,11 +755,19 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Cond.L.Unlock()
 		sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": false}\n", room.Round))
 	case "addRule":
-		// Need to validate roomCode and playerID meets a regex check (and playerID is in the room)
-		room := rooms[actionDetails.RoomCode]
-		player := room.Players[actionDetails.PlayerID]
-		newRule := actionDetails.NewRule
+		room, err := getRoom(rooms, actionDetails.RoomCode)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"addRule\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
 
+		player, err := getPlayer(room, actionDetails.PlayerID)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"addRule\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			return
+		}
+
+		newRule := actionDetails.NewRule
 		// Validate the received player actually won
 		if len(player.Hand.Cards) == 0 {
 			success := addRule(room, newRule)

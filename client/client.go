@@ -247,22 +247,35 @@ func createRoom(player *Player, isPrivate bool, numRounds int, handSize int) {
 	}
 }
 
-func joinRoom(player *Player, roomCode string) {
+func joinRoom(player *Player, roomCode string) bool {
 	netData := sendData(fmt.Sprintf("{\"action\": \"joinRoom\", \"roomCode\": \"%s\"}\n", roomCode))
+	type JoinDetails struct {
+		Success bool
+		Player  Player
+	}
 
-	var playerData map[string]any
-	err := json.Unmarshal([]byte(netData), &playerData)
+	var joinDetails JoinDetails
+	var joinData map[string]any
+	err := json.Unmarshal([]byte(netData), &joinData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
 	}
 
 	// Loads the JSON data into the player struct using mapstructure
-	err = mapstructure.Decode(playerData, &player)
+	err = mapstructure.Decode(joinData, &joinDetails)
 	if err != nil {
 		panic(err)
 	}
-	player.RoomCode = roomCode
+
+	if !joinDetails.Success {
+		return false
+	} else {
+		*player = joinDetails.Player
+
+		player.RoomCode = roomCode
+		return true
+	}
 }
 
 func leaveRoom(player Player) {
@@ -674,8 +687,11 @@ func main() {
 				} else if !match {
 					continue
 				}
-				joinRoom(&player, roomCode)
-				break
+				joinedSuccessfully := joinRoom(&player, roomCode)
+
+				if joinedSuccessfully {
+					break
+				}
 			}
 
 			if exitBreak {
