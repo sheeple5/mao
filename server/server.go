@@ -518,6 +518,18 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		}
 		sendData(conn, fmt.Appendf(nil, "{\"stats\": {%s}}\n", strings.Join(playerStats, ", ")))
 	case "createRoom":
+		if actionDetails.HandSize < 0 || actionDetails.HandSize > 15 {
+			sendData(conn, []byte("{\"action\": \"createRoom\", \"success\": false, \"message\": \"Specified handsize not between 1 and 15.\"}\n"))
+			return
+
+		}
+
+		if actionDetails.NumRounds < 0 || actionDetails.NumRounds > 10 {
+			sendData(conn, []byte("{\"action\": \"createRoom\", \"success\": false, \"message\": \"Specified number of rounds not between 1 and 10.\"}\n"))
+			return
+
+		}
+
 		roomCode := generateRoomCode()
 		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), HandSize: actionDetails.HandSize, IsStarted: false, Players: make(map[string]*Player), IsPrivate: actionDetails.IsPrivate, Round: 0, RoundCount: actionDetails.NumRounds}
 		newRoom.Cond = sync.NewCond(&newRoom.Mu)
