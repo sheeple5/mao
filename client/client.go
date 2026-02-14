@@ -783,6 +783,11 @@ func main() {
 							newRule, _ := reader.ReadString('\n')
 							newRule = strings.TrimSpace(newRule)
 
+							if newRule == "leave" {
+								leaveRoom(player)
+								break
+							}
+
 							if addRule(player, newRule) {
 								gameMessage = "Rule added successfully."
 							} else {

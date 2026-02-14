@@ -239,6 +239,13 @@ func (hand *Hand) drawCard(deck *Deck) {
 
 func (player *Player) drawHand(room *Room) {
 	hand := make([]Card, room.HandSize)
+
+	if len(room.Deck.Pile) < room.HandSize {
+		newDeck := initializeDeck()
+		room.Deck.Pile = append(room.Deck.Pile, newDeck.Pile...)
+		room.Deck.Pile = append(room.Deck.Pile, newDeck.DiscardPile...)
+	}
+
 	copy(hand, room.Deck.Pile[:room.HandSize])
 
 	player.Hand.Cards = hand
@@ -403,6 +410,10 @@ func leaveRoom(rooms map[string]*Room, room *Room, player Player) {
 	}
 	room.Cond.Signal()
 	room.Cond.L.Unlock()
+
+	if !room.IsStarted && player.CanStartGame {
+		room.IsStarted = true
+	}
 
 	room.Deck.Pile = append(room.Deck.Pile, player.Hand.Cards...)
 	delete(room.Players, player.PlayerID)
@@ -672,7 +683,6 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 					sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false}\n", room.Round, cardList))
 				} else {
 					player.Wins += 1
-					room.PlayerTurn = getNextTurn(room)
 					room.IsStarted = false
 					room.Round += 1
 					room.Deck = initializeDeck()
