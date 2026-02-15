@@ -121,9 +121,17 @@ func getHealthCheck() bool {
 	}
 }
 
+func getPadding(text string) string {
+	terminalWidth := getTerminalWidth()
+	return strings.Repeat(" ", (terminalWidth/2)-(len(text)/2))
+}
+
 func printRoomMenu(isPrivate bool, numRounds int, handSize int, message string) {
 	terminalWidth := getTerminalWidth()
-	printHeader("Room Options")
+	printLogo()
+	fmt.Println(strings.Repeat("─", terminalWidth))
+	fmt.Printf("%s%s\n", getPadding("Room Options"), "Room Options")
+	fmt.Println("─┬" + strings.Repeat("─", terminalWidth-2))
 
 	var publicOption string
 	if isPrivate {
@@ -131,13 +139,19 @@ func printRoomMenu(isPrivate bool, numRounds int, handSize int, message string) 
 	} else {
 		publicOption = "Public"
 	}
-	fmt.Printf("1. Set Public/Private: %s\n", publicOption)
-	fmt.Printf("2. Change Number of Rounds: %d\n", numRounds)
-	fmt.Printf("3. Change Initial Hand Size: %d\n", handSize)
-	fmt.Println("--------------------")
-	fmt.Println("C. Create room")
-	fmt.Println("E. Return to main menu")
-	fmt.Println(strings.Repeat("─", terminalWidth))
+
+	publicMenu := fmt.Sprintf("Set Public/Private: %s", publicOption)
+	fmt.Printf("1│%s%s\n", getPadding("1│"+publicMenu), publicMenu)
+	roundsMenu := fmt.Sprintf("Change Number of Rounds: %d", numRounds)
+	fmt.Printf("2│%s%s\n", getPadding("2│"+roundsMenu), roundsMenu)
+	handMenu := fmt.Sprintf("Change Initial Hand Size: %d", handSize)
+	fmt.Printf("3│%s%s\n", getPadding("3│"+handMenu), handMenu)
+	fmt.Println("─┼" + strings.Repeat("─", terminalWidth-2))
+	createMenu := "Create room"
+	fmt.Printf("C│%s%s\n", getPadding("C│"+createMenu), createMenu)
+	exitMenu := "Return to main menu"
+	fmt.Printf("E│%s%s\n", getPadding("E│"+exitMenu), exitMenu)
+	fmt.Println("─┴" + strings.Repeat("─", terminalWidth-2))
 
 	if message != "" {
 		fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
