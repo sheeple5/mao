@@ -78,6 +78,7 @@ type Room struct {
 	HandSize   int
 	IsStarted  bool
 	IsPrivate  bool
+	CanAddRule bool
 	DrawTurn   int
 	PlayerTurn int
 	Round      int
@@ -542,7 +543,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		}
 
 		roomCode := generateRoomCode()
-		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), HandSize: actionDetails.HandSize, IsStarted: false, Players: make(map[string]*Player), IsPrivate: actionDetails.IsPrivate, Round: 0, RoundCount: actionDetails.NumRounds}
+		newRoom := Room{RoomCode: roomCode, Deck: initializeDeck(), HandSize: actionDetails.HandSize, IsStarted: false, Players: make(map[string]*Player), IsPrivate: actionDetails.IsPrivate, CanAddRule: false, Round: 0, RoundCount: actionDetails.NumRounds}
 		newRoom.Cond = sync.NewCond(&newRoom.Mu)
 
 		newPlayer := Player{PlayerID: uuid.NewString(), PlayerNumber: 0, CanStartGame: true}
@@ -590,27 +591,26 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 			}
 		}
 		sendData(conn, fmt.Appendf(nil, "{\"rooms\": \"%s\"}\n", strings.Join(roomCodes, " ")))
-	case "waitingStart":
+	case "waitStart":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"waitingStart\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			sendData(conn, []byte("{\"action\": \"waitStart\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
 			return
 		}
 
 		player, err := getPlayer(room, actionDetails.PlayerID)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"waitingStart\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			sendData(conn, []byte("{\"action\": \"waitStart\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
 			return
 		}
 
 		room.Cond.L.Lock()
 		for !room.IsStarted {
 			room.Cond.Wait()
+			player.drawHand(room)
+			cardList := player.listCards()
+			sendData(conn, fmt.Appendf(nil, "{\"initialHand\": \"%s\"}\n", cardList))
 		}
-
-		player.drawHand(room)
-		cardList := player.listCards()
-		sendData(conn, fmt.Appendf(nil, "{\"initialHand\": \"%s\"}\n", cardList))
 
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
@@ -629,13 +629,13 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		// Checks to see if the given player can start the game and, if so, does so
 		room.Cond.L.Lock()
-		if player.CanStartGame {
+		if player.CanStartGame && !room.IsStarted {
 			room.IsStarted = true
 			player.drawHand(room)
 			cardList := player.listCards()
 			sendData(conn, fmt.Appendf(nil, "{\"initialHand\": \"%s\"}\n", cardList))
 		} else {
-			sendData(conn, []byte("{\"gameStarted\": \"false\", \"message\": \"Only first player can start the game\"}\n"))
+			sendData(conn, []byte("{\"gameStarted\": \"false\", \"message\": \"Can not start game\"}\n"))
 		}
 
 		room.Cond.Signal()
@@ -684,6 +684,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				} else {
 					player.Wins += 1
 					room.IsStarted = false
+					room.CanAddRule = true
 					room.Round += 1
 					room.Deck = initializeDeck()
 
@@ -791,13 +792,14 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		newRule := actionDetails.NewRule
 		// Validate the received player actually won
-		if len(player.Hand.Cards) == 0 {
+		if len(player.Hand.Cards) == 0 && room.CanAddRule {
+			room.CanAddRule = false
 			success := addRule(room, newRule)
-			sendData(conn, fmt.Appendf(nil, "{\"success\": %t}\n", success))
+			sendData(conn, fmt.Appendf(nil, "{\"action\": \"addRule\", \"success\": %t}\n", success))
 		} else {
-			sendData(conn, []byte("\"success\": false}\n"))
+			sendData(conn, []byte("{\"action\": \"addRule\", \"success\": false}\n"))
 		}
 	default:
-		fmt.Printf("Received message: %v\n", actionDetails)
+		fmt.Printf("Invalid request: %v\n", actionDetails)
 	}
 }

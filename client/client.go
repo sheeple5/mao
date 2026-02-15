@@ -345,7 +345,7 @@ func startGame(player Player) (string, error) {
 }
 
 func waitForGameStart(player Player) (string, error) {
-	netData, err := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"waitingStart\"}\n", player.PlayerID, player.RoomCode))
+	netData, err := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"waitStart\"}\n", player.PlayerID, player.RoomCode))
 	if err != nil {
 		return "", err
 	}
