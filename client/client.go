@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -38,11 +39,9 @@ func getTerminalWidth() int {
 	return terminalWidth
 }
 
-func chooseServer() string {
-	message := ""
-
+func chooseServer(serverMessage string) string {
 	for {
-		printHeader(message)
+		printHeader(serverMessage)
 
 		fmt.Print("Enter a server IP (or exit to exit): ")
 		fmt.Scan(&serverIP)
@@ -54,17 +53,15 @@ func chooseServer() string {
 		if getHealthCheck() {
 			return serverIP
 		} else {
-			message = fmt.Sprintf("Could not connect to server %s", serverIP)
+			serverMessage = fmt.Sprintf("Could not connect to server %s", serverIP)
 		}
 	}
 }
 
-func sendData(payload string) string {
+func sendData(payload string) (string, error) {
 	conn, err := net.Dial("tcp", fmt.Sprintf("%s:9090", serverIP))
-	if err != nil && payload == "{\"action\": \"healthCheck\"}\n" {
-		return "{\"success\": false}"
-	} else if err != nil {
-		panic(err)
+	if err != nil {
+		return "", errors.New("lost connection")
 	}
 
 	defer func() {
@@ -76,24 +73,28 @@ func sendData(payload string) string {
 	writer := bufio.NewWriter(conn)
 	_, err = writer.WriteString(payload)
 	if err != nil {
-		panic(err)
+		return "", errors.New("failed to write playload")
 	}
 
 	err = writer.Flush()
 	if err != nil {
-		panic(err)
+		return "", errors.New("failed to flush writer")
 	}
 
 	netData, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		panic(err)
+		return "", errors.New("failed to read data")
 	}
 
-	return netData
+	return netData, nil
 }
 
 func getHealthCheck() bool {
-	netData := sendData("{\"action\": \"healthCheck\"}\n")
+	netData, err := sendData("{\"action\": \"healthCheck\"}\n")
+	if err != nil {
+		return false
+	}
+
 	type HealthDetails struct {
 		Service string
 		Success bool
@@ -101,7 +102,7 @@ func getHealthCheck() bool {
 
 	var healthDetails HealthDetails
 	var healthData map[string]any
-	err := json.Unmarshal([]byte(netData), &healthData)
+	err = json.Unmarshal([]byte(netData), &healthData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -230,11 +231,14 @@ func roomOptions(isPrivate *bool, numRounds *int, handSize *int) bool {
 	}
 }
 
-func createRoom(player *Player, isPrivate bool, numRounds int, handSize int) {
-	netData := sendData(fmt.Sprintf("{\"action\": \"createRoom\", \"isPrivate\": %t, \"numRounds\": %d, \"handSize\": %d}\n", isPrivate, numRounds, handSize))
+func createRoom(player *Player, isPrivate bool, numRounds int, handSize int) error {
+	netData, err := sendData(fmt.Sprintf("{\"action\": \"createRoom\", \"isPrivate\": %t, \"numRounds\": %d, \"handSize\": %d}\n", isPrivate, numRounds, handSize))
+	if err != nil {
+		return err
+	}
 
 	var playerData map[string]any
-	err := json.Unmarshal([]byte(netData), &playerData)
+	err = json.Unmarshal([]byte(netData), &playerData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -245,10 +249,15 @@ func createRoom(player *Player, isPrivate bool, numRounds int, handSize int) {
 	if err != nil {
 		panic(err)
 	}
+	return nil
 }
 
-func joinRoom(player *Player, roomCode string) bool {
-	netData := sendData(fmt.Sprintf("{\"action\": \"joinRoom\", \"roomCode\": \"%s\"}\n", roomCode))
+func joinRoom(player *Player, roomCode string) (bool, error) {
+	netData, err := sendData(fmt.Sprintf("{\"action\": \"joinRoom\", \"roomCode\": \"%s\"}\n", roomCode))
+	if err != nil {
+		return false, err
+	}
+
 	type JoinDetails struct {
 		Success bool
 		Player  Player
@@ -256,7 +265,7 @@ func joinRoom(player *Player, roomCode string) bool {
 
 	var joinDetails JoinDetails
 	var joinData map[string]any
-	err := json.Unmarshal([]byte(netData), &joinData)
+	err = json.Unmarshal([]byte(netData), &joinData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -269,28 +278,33 @@ func joinRoom(player *Player, roomCode string) bool {
 	}
 
 	if !joinDetails.Success {
-		return false
+		return false, nil
 	} else {
 		*player = joinDetails.Player
 
 		player.RoomCode = roomCode
-		return true
+		return true, nil
 	}
 }
 
-func leaveRoom(player Player) {
-	_ = sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"leaveRoom\"}\n", player.PlayerID, player.RoomCode))
+func leaveRoom(player Player) error {
+	_, err := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"leaveRoom\"}\n", player.PlayerID, player.RoomCode))
+	return err
 }
 
-func getRooms() string {
-	netData := sendData("{\"action\": \"getRooms\"}\n")
+func getRooms() (string, error) {
+	netData, err := sendData("{\"action\": \"getRooms\"}\n")
+	if err != nil {
+		return "", err
+	}
+
 	type RoomsDetails struct {
 		Rooms string
 	}
 
 	var roomsDetails RoomsDetails
 	var roomsData map[string]any
-	err := json.Unmarshal([]byte(netData), &roomsData)
+	err = json.Unmarshal([]byte(netData), &roomsData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -301,18 +315,22 @@ func getRooms() string {
 	if err != nil {
 		panic(err)
 	}
-	return roomsDetails.Rooms
+	return roomsDetails.Rooms, nil
 }
 
-func startGame(player Player) string {
-	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"startGame\"}\n", player.PlayerID, player.RoomCode))
+func startGame(player Player) (string, error) {
+	netData, err := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"startGame\"}\n", player.PlayerID, player.RoomCode))
+	if err != nil {
+		return "", err
+	}
+
 	type InitialHandDetails struct {
 		InitialHand string
 	}
 
 	var initialHandDetails InitialHandDetails
 	var handData map[string]any
-	err := json.Unmarshal([]byte(netData), &handData)
+	err = json.Unmarshal([]byte(netData), &handData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -323,18 +341,22 @@ func startGame(player Player) string {
 	if err != nil {
 		panic(err)
 	}
-	return initialHandDetails.InitialHand
+	return initialHandDetails.InitialHand, nil
 }
 
-func waitForGameStart(player Player) string {
-	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"waitingStart\"}\n", player.PlayerID, player.RoomCode))
+func waitForGameStart(player Player) (string, error) {
+	netData, err := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"waitingStart\"}\n", player.PlayerID, player.RoomCode))
+	if err != nil {
+		return "", err
+	}
+
 	type InitialHandDetails struct {
 		InitialHand string
 	}
 
 	var initialHandDetails InitialHandDetails
 	var handData map[string]any
-	err := json.Unmarshal([]byte(netData), &handData)
+	err = json.Unmarshal([]byte(netData), &handData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -345,11 +367,15 @@ func waitForGameStart(player Player) string {
 	if err != nil {
 		panic(err)
 	}
-	return initialHandDetails.InitialHand
+	return initialHandDetails.InitialHand, nil
 }
 
-func requestTurn(player Player) []string {
-	netData := sendData(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"requestTurn\"}\n", player.RoomCode))
+func requestTurn(player Player) ([]string, error) {
+	netData, err := sendData(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"requestTurn\"}\n", player.RoomCode))
+	if err != nil {
+		return []string{}, err
+	}
+
 	type RequestTurnDetails struct {
 		PlayerNumber int
 		TopCard      string
@@ -357,7 +383,7 @@ func requestTurn(player Player) []string {
 
 	var requestTurnDetails RequestTurnDetails
 	var turnData map[string]any
-	err := json.Unmarshal([]byte(netData), &turnData)
+	err = json.Unmarshal([]byte(netData), &turnData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -370,11 +396,15 @@ func requestTurn(player Player) []string {
 	}
 
 	fmt.Println(requestTurnDetails.PlayerNumber)
-	return []string{strconv.Itoa(requestTurnDetails.PlayerNumber), requestTurnDetails.TopCard}
+	return []string{strconv.Itoa(requestTurnDetails.PlayerNumber), requestTurnDetails.TopCard}, nil
 }
 
-func waitTurn(player Player) []any {
-	netData := sendData(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"waitTurn\"}\n", player.RoomCode))
+func waitTurn(player Player) ([]any, error) {
+	netData, err := sendData(fmt.Sprintf("{\"roomCode\": \"%s\", \"action\": \"waitTurn\"}\n", player.RoomCode))
+	if err != nil {
+		return []any{}, err
+	}
+
 	type GameWonDetails struct {
 		WonRound           bool
 		WinningRoundPlayer string
@@ -385,7 +415,7 @@ func waitTurn(player Player) []any {
 
 	var gameWonDetails GameWonDetails
 	var gameData map[string]any
-	err := json.Unmarshal([]byte(netData), &gameData)
+	err = json.Unmarshal([]byte(netData), &gameData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -397,11 +427,15 @@ func waitTurn(player Player) []any {
 		panic(err)
 	}
 
-	return []any{gameWonDetails.WonRound, gameWonDetails.WinningRoundPlayer, gameWonDetails.WinningGamePlayer, gameWonDetails.Round, gameWonDetails.Stats}
+	return []any{gameWonDetails.WonRound, gameWonDetails.WinningRoundPlayer, gameWonDetails.WinningGamePlayer, gameWonDetails.Round, gameWonDetails.Stats}, nil
 }
 
-func (player Player) playCard(playedCard string) []any {
-	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"playCard\", \"card\": \"%s\"}\n", player.PlayerID, player.RoomCode, playedCard))
+func (player Player) playCard(playedCard string) ([]any, error) {
+	netData, err := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"playCard\", \"card\": \"%s\"}\n", player.PlayerID, player.RoomCode, playedCard))
+	if err != nil {
+		return []any{}, err
+	}
+
 	type RuleCheckResults struct {
 		RulesPassed bool
 		CurrentHand string
@@ -413,7 +447,7 @@ func (player Player) playCard(playedCard string) []any {
 
 	var ruleCheckResults RuleCheckResults
 	var ruleData map[string]any
-	err := json.Unmarshal([]byte(netData), &ruleData)
+	err = json.Unmarshal([]byte(netData), &ruleData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -425,18 +459,22 @@ func (player Player) playCard(playedCard string) []any {
 		panic(err)
 	}
 
-	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonRound, ruleCheckResults.Winner, ruleCheckResults.Round, ruleCheckResults.Stats}
+	return []any{ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonRound, ruleCheckResults.Winner, ruleCheckResults.Round, ruleCheckResults.Stats}, nil
 }
 
-func addRule(player Player, newRule string) bool {
-	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"addRule\", \"newRule\": \"%s\"}\n", player.PlayerID, player.RoomCode, newRule))
+func addRule(player Player, newRule string) (bool, error) {
+	netData, err := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"addRule\", \"newRule\": \"%s\"}\n", player.PlayerID, player.RoomCode, newRule))
+	if err != nil {
+		return false, err
+	}
+
 	type AddRuleResults struct {
 		Success bool
 	}
 
 	var addRuleResults AddRuleResults
 	var ruleData map[string]any
-	err := json.Unmarshal([]byte(netData), &ruleData)
+	err = json.Unmarshal([]byte(netData), &ruleData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -448,18 +486,22 @@ func addRule(player Player, newRule string) bool {
 		panic(err)
 	}
 
-	return addRuleResults.Success
+	return addRuleResults.Success, nil
 }
 
-func getStats(player Player) map[string]int {
-	netData := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"getStats\"}\n", player.PlayerID, player.RoomCode))
+func getStats(player Player) (map[string]int, error) {
+	netData, err := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"getStats\"}\n", player.PlayerID, player.RoomCode))
+	if err != nil {
+		return make(map[string]int), err
+	}
+
 	type Stats struct {
 		Stats map[string]int
 	}
 
 	var stats Stats
 	var statsData map[string]any
-	err := json.Unmarshal([]byte(netData), &statsData)
+	err = json.Unmarshal([]byte(netData), &statsData)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
@@ -471,7 +513,7 @@ func getStats(player Player) map[string]int {
 		panic(err)
 	}
 
-	return stats.Stats
+	return stats.Stats, nil
 }
 
 func printLogo() { // Should also introduce height variability as well
@@ -629,10 +671,12 @@ func main() {
 	}()
 
 	var handList string
+	var serverMessage string
 
 	for {
 		if serverIP == "" {
-			chooseServer()
+			chooseServer(serverMessage)
+			serverMessage = ""
 		}
 
 		if serverIP == "exit" {
@@ -662,14 +706,26 @@ func main() {
 			doCreate := roomOptions(&isPrivate, &numRounds, &handSize)
 
 			if doCreate {
-				createRoom(&player, isPrivate, numRounds, handSize)
+				err := createRoom(&player, isPrivate, numRounds, handSize)
+				if err != nil {
+					serverMessage = "Lost connection to server."
+					serverIP = ""
+					continue
+				}
 			} else {
 				continue
 			}
 		case "2":
 			exitBreak := false
+			lostConnection := false
 			for {
-				roomsList := getRooms()
+				roomsList, err := getRooms()
+				if err != nil {
+					lostConnection = true
+					exitBreak = true
+					break
+				}
+
 				printHeader(fmt.Sprintf("Open Rooms: %s", roomsList))
 
 				var roomCode string
@@ -687,11 +743,21 @@ func main() {
 				} else if !match {
 					continue
 				}
-				joinedSuccessfully := joinRoom(&player, roomCode)
+				joinedSuccessfully, err := joinRoom(&player, roomCode)
+				if err != nil {
+					lostConnection = true
+					exitBreak = true
+					break
+				}
 
 				if joinedSuccessfully {
 					break
 				}
+			}
+
+			if lostConnection {
+				serverMessage = "Lost connection to server."
+				serverIP = ""
 			}
 
 			if exitBreak {
@@ -703,6 +769,7 @@ func main() {
 		}
 
 		if player.CanStartGame {
+			lostConnection := false
 			for {
 				message := fmt.Sprintf("Room Code: %s", player.RoomCode)
 				printHeader(message)
@@ -710,19 +777,42 @@ func main() {
 				fmt.Scan(&choice)
 
 				if choice == "Y" {
-					handList = startGame(player)
+					newHandList, err := startGame(player)
+					if err != nil {
+						lostConnection = true
+					} else {
+						handList = newHandList
+					}
 					break
 				}
 			}
+			if lostConnection {
+				serverMessage = "Lost connection to server."
+				serverIP = ""
+				continue
+			}
 		} else {
 			printHeader("Waiting for game to start...")
-			handList = waitForGameStart(player)
+			newHandList, err := waitForGameStart(player)
+			if err != nil {
+				serverMessage = "Lost connection to server."
+				serverIP = ""
+				continue
+			} else {
+				handList = newHandList
+			}
 		}
 
 		gameMessage := ""
+		lostConnection := false
 		for {
 			// Request turn
-			turnDetails := requestTurn(player)
+			turnDetails, err := requestTurn(player)
+			if err != nil {
+				lostConnection = true
+				break
+			}
+
 			turnPlayerNumber := turnDetails[0]
 			turnTopCard := turnDetails[1]
 
@@ -749,7 +839,12 @@ func main() {
 					break
 				}
 
-				playResults := player.playCard(playedCard)
+				playResults, err := player.playCard(playedCard)
+				if err != nil {
+					lostConnection = true
+					break
+				}
+
 				if winner, ok := playResults[3].(string); ok {
 					if winner != "" {
 						if stats, ok := playResults[5].(map[string]int); ok {
@@ -776,7 +871,14 @@ func main() {
 					if wonRound {
 						if round, ok := playResults[4].(int); ok {
 							printHeader(fmt.Sprintf("You won Round %d!", round))
-							printStats(getStats(player))
+
+							stats, err := getStats(player)
+							if err != nil {
+								lostConnection = true
+								break
+							} else {
+								printStats(stats)
+							}
 
 							reader := bufio.NewReader(os.Stdin)
 							fmt.Print("As your reward, describe a new rule to add to the game: ")
@@ -788,12 +890,25 @@ func main() {
 								break
 							}
 
-							if addRule(player, newRule) {
+							addedRule, err := addRule(player, newRule)
+							if err != nil {
+								lostConnection = true
+								break
+							}
+
+							if addedRule {
 								gameMessage = "Rule added successfully."
 							} else {
 								gameMessage = "Your rule could not be added."
 							}
-							handList = startGame(player)
+
+							newHandList, err := startGame(player)
+							if err != nil {
+								lostConnection = true
+							} else {
+								handList = newHandList
+							}
+
 							continue
 						}
 					}
@@ -817,7 +932,12 @@ func main() {
 				terminalWidth := getTerminalWidth()
 				fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
 				fmt.Println(strings.Repeat("─", terminalWidth))
-				playResults := waitTurn(player)
+
+				playResults, err := waitTurn(player)
+				if err != nil {
+					lostConnection = true
+					break
+				}
 
 				if winner, ok := playResults[2].(string); ok {
 					if winner != "" {
@@ -847,16 +967,35 @@ func main() {
 							if round, ok := playResults[3].(int); ok {
 								message := fmt.Sprintf("Player %s won Round %d.", winningPlayer, round)
 								printHeader(message)
-								printStats(getStats(player))
+
+								stats, err := getStats(player)
+								if err != nil {
+									lostConnection = true
+									break
+								} else {
+									printStats(stats)
+								}
 
 								fmt.Printf("Waiting for player %s to add a new rule...\n", winningPlayer)
-								handList = waitForGameStart(player)
+
+								newHandList, err := waitForGameStart(player)
+								if err != nil {
+									lostConnection = true
+									break
+								} else {
+									handList = newHandList
+								}
+
 								continue
 							}
 						}
 					}
 				}
 			}
+		}
+		if lostConnection {
+			serverMessage = "Lost connection to server."
+			serverIP = ""
 		}
 	}
 }
