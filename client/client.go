@@ -30,18 +30,18 @@ var (
 	serverIP string
 )
 
-func getTerminalWidth() int {
+func getTerminalDimensions() (int, int) {
 	fd := int(os.Stdout.Fd())
-	terminalWidth, _, err := term.GetSize(fd)
+	terminalWidth, terminalHeight, err := term.GetSize(fd)
 	if err != nil {
 		panic(err)
 	}
-	return terminalWidth
+	return terminalWidth, terminalHeight
 }
 
 func chooseServer(serverMessage string) string {
 	for {
-		printHeader(serverMessage)
+		printHeader(serverMessage, 1)
 
 		fmt.Print("Enter a server IP (or exit to exit): ")
 		fmt.Scan(&serverIP)
@@ -122,13 +122,18 @@ func getHealthCheck() bool {
 }
 
 func getPadding(text string) string {
-	terminalWidth := getTerminalWidth()
+	terminalWidth, _ := getTerminalDimensions()
 	return strings.Repeat(" ", (terminalWidth/2)-(len(text)/2))
 }
 
 func printRoomMenu(isPrivate bool, numRounds int, handSize int, message string) {
-	terminalWidth := getTerminalWidth()
-	printLogo()
+	terminalWidth, _ := getTerminalDimensions()
+	extraLines := 10
+	if message != "" {
+		extraLines += 2
+	}
+	printLogo(extraLines)
+
 	fmt.Println(strings.Repeat("─", terminalWidth))
 	fmt.Printf("%s%s\n", getPadding("Room Options"), "Room Options")
 	fmt.Println("─┬" + strings.Repeat("─", terminalWidth-2))
@@ -184,7 +189,7 @@ func roomOptions(isPrivate *bool, numRounds *int, handSize *int) bool {
 			var privateChoice string
 
 			for {
-				printHeader("Set Public/Private")
+				printHeader("Set Public/Private", 1)
 				fmt.Print("Choose Public or Private: ")
 				fmt.Scan(&privateChoice)
 
@@ -204,7 +209,7 @@ func roomOptions(isPrivate *bool, numRounds *int, handSize *int) bool {
 			var inputRounds string
 
 			for {
-				printHeader("Set Number of Rounds")
+				printHeader("Set Number of Rounds", 1)
 				fmt.Print("Enter the number of rounds to play: ")
 				fmt.Scan(&inputRounds)
 
@@ -224,7 +229,7 @@ func roomOptions(isPrivate *bool, numRounds *int, handSize *int) bool {
 			var inputHand string
 
 			for {
-				printHeader("Set Initial Hand Size")
+				printHeader("Set Initial Hand Size", 1)
 				fmt.Print("Enter the number of cards to start the game with: ")
 				fmt.Scan(&inputHand)
 
@@ -530,7 +535,7 @@ func getStats(player Player) (map[string]int, error) {
 	return stats.Stats, nil
 }
 
-func printLogo() { // Should also introduce height variability as well
+func printLogo(extraLines int) {
 	titleLarge := `          _____                    _____                   _______         
          /\    \                  /\    \                 /::\    \        
         /::\____\                /::\    \               /::::\    \       
@@ -588,12 +593,12 @@ func printLogo() { // Should also introduce height variability as well
 	titleTinyLines := strings.Split(titleTiny, "\n")
 
 	var printTitle []string
-	terminalWidth := getTerminalWidth()
-	if terminalWidth > len(titleLargeLines[0]) {
+	terminalWidth, terminalHeight := getTerminalDimensions()
+	if terminalWidth > len(titleLargeLines[0]) && terminalHeight > len(titleLargeLines)+extraLines {
 		printTitle = titleLargeLines
-	} else if terminalWidth > len(titleMediumLines[0]) {
+	} else if terminalWidth > len(titleMediumLines[0]) && terminalHeight > len(titleMediumLines)+extraLines {
 		printTitle = titleMediumLines
-	} else if terminalWidth > len(titleSmallLines[0]) {
+	} else if terminalWidth > len(titleSmallLines[0]) && terminalHeight > len(titleSmallLines)+extraLines {
 		printTitle = titleSmallLines
 	} else {
 		printTitle = titleTinyLines
@@ -606,10 +611,14 @@ func printLogo() { // Should also introduce height variability as well
 	}
 }
 
-func printHeader(message string) {
-	printLogo()
+func printHeader(message string, extraLines int) {
+	extraLines += 1
+	if message != "" {
+		extraLines += 2
+	}
+	printLogo(extraLines)
 
-	terminalWidth := getTerminalWidth()
+	terminalWidth, _ := getTerminalDimensions()
 	fmt.Println(strings.Repeat("─", terminalWidth))
 
 	if message != "" {
@@ -619,11 +628,11 @@ func printHeader(message string) {
 }
 
 func printMainMenu() {
-	terminalWidth := getTerminalWidth()
+	terminalWidth, _ := getTerminalDimensions()
 	serverBanner := fmt.Sprintf("Current Server: %s", serverIP)
 	serverPadding := strings.Repeat(" ", (terminalWidth/2)-(len(serverBanner)/2))
 
-	printLogo()
+	printLogo(7)
 	fmt.Println(strings.Repeat("─", terminalWidth))
 	fmt.Printf("%s%s\n", serverPadding, serverBanner)
 	fmt.Println("─┬" + strings.Repeat("─", terminalWidth-2))
@@ -637,9 +646,13 @@ func printMainMenu() {
 }
 
 func printTurn(player Player, handList string, adjustedPlayerNumber int, turnTopCard string, message string) {
-	printHeader("")
+	extraLines := 8
+	if message != "" {
+		extraLines += 2
+	}
+	printHeader("", extraLines)
 
-	terminalWidth := getTerminalWidth()
+	terminalWidth, _ := getTerminalDimensions()
 	if adjustedPlayerNumber-1 == player.PlayerNumber {
 		fmt.Printf("%sYOUR TURN\n", strings.Repeat(" ", (terminalWidth/2)-4))
 	} else {
@@ -660,7 +673,7 @@ func printTurn(player Player, handList string, adjustedPlayerNumber int, turnTop
 }
 
 func printStats(stats map[string]int) {
-	terminalWidth := getTerminalWidth()
+	terminalWidth, _ := getTerminalDimensions()
 	for playerNumber, numWins := range stats {
 		intPlayerNumber, err := strconv.Atoi(playerNumber)
 		if err != nil {
@@ -740,7 +753,7 @@ func main() {
 					break
 				}
 
-				printHeader(fmt.Sprintf("Open Rooms: %s", roomsList))
+				printHeader(fmt.Sprintf("Open Rooms: %s", roomsList), 1)
 
 				var roomCode string
 				fmt.Print("Enter a room code: ")
@@ -786,7 +799,7 @@ func main() {
 			lostConnection := false
 			for {
 				message := fmt.Sprintf("Room Code: %s", player.RoomCode)
-				printHeader(message)
+				printHeader(message, 1)
 				fmt.Print("Press Y to start the game: ") // Should include an option to back out. Can I also display number of users joined?
 				fmt.Scan(&choice)
 
@@ -806,7 +819,7 @@ func main() {
 				continue
 			}
 		} else {
-			printHeader("Waiting for game to start...")
+			printHeader("Waiting for game to start...", 0)
 			newHandList, err := waitForGameStart(player)
 			if err != nil {
 				serverMessage = "Lost connection to server."
@@ -863,14 +876,14 @@ func main() {
 					if winner != "" {
 						if stats, ok := playResults[5].(map[string]int); ok {
 							if winner == strconv.Itoa(player.PlayerNumber) {
-								printHeader("You won the game!")
+								printHeader("You won the game!", len(stats)+2)
 							} else {
 								adjustedWinner, err := strconv.Atoi(winner)
 								if err != nil {
 									panic(err)
 								}
 								adjustedWinner += 1
-								printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner))
+								printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner), len(stats)+2)
 							}
 							printStats(stats)
 							var confirm string
@@ -884,15 +897,13 @@ func main() {
 				if wonRound, ok := playResults[2].(bool); ok {
 					if wonRound {
 						if round, ok := playResults[4].(int); ok {
-							printHeader(fmt.Sprintf("You won Round %d!", round))
-
 							stats, err := getStats(player)
 							if err != nil {
 								lostConnection = true
 								break
-							} else {
-								printStats(stats)
 							}
+							printHeader(fmt.Sprintf("You won Round %d!", round), len(stats)+2)
+							printStats(stats)
 
 							reader := bufio.NewReader(os.Stdin)
 							fmt.Print("As your reward, describe a new rule to add to the game: ")
@@ -943,7 +954,7 @@ func main() {
 				// once card has actually been played and is valid, respond back with new handlist for next turn
 			} else {
 				message := "Waiting for turn..."
-				terminalWidth := getTerminalWidth()
+				terminalWidth, _ := getTerminalDimensions()
 				fmt.Printf("%s%s\n", strings.Repeat(" ", (terminalWidth/2)-(len(message)/2)), message)
 				fmt.Println(strings.Repeat("─", terminalWidth))
 
@@ -957,14 +968,14 @@ func main() {
 					if winner != "" {
 						if stats, ok := playResults[4].(map[string]int); ok {
 							if winner == strconv.Itoa(player.PlayerNumber) {
-								printHeader("You won the game!")
+								printHeader("You won the game!", len(stats)+2)
 							} else {
 								adjustedWinner, err := strconv.Atoi(winner)
 								if err != nil {
 									panic(err)
 								}
 								adjustedWinner += 1
-								printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner))
+								printHeader(fmt.Sprintf("Game Over. Player %d wins!", adjustedWinner), len(stats)+2)
 							}
 							printStats(stats)
 							var confirm string
@@ -979,16 +990,14 @@ func main() {
 					if wonRound {
 						if winningPlayer, ok := playResults[1].(string); ok {
 							if round, ok := playResults[3].(int); ok {
-								message := fmt.Sprintf("Player %s won Round %d.", winningPlayer, round)
-								printHeader(message)
-
 								stats, err := getStats(player)
 								if err != nil {
 									lostConnection = true
 									break
-								} else {
-									printStats(stats)
 								}
+								message := fmt.Sprintf("Player %s won Round %d.", winningPlayer, round)
+								printHeader(message, len(stats)+2)
+								printStats(stats)
 
 								fmt.Printf("Waiting for player %s to add a new rule...\n", winningPlayer)
 
