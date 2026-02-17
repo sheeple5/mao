@@ -660,7 +660,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				player.Hand.drawCard(&room.Deck)
 
 				cardList := player.listCards()
-				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false}\n", room.Round, cardList))
+				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
 				room.PlayerTurn = getNextTurn(room)
 			} else if rulesCheck(*player, playedCard, room) {
 				// Pop card
@@ -680,7 +680,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 				cardList := player.listCards()
 				if len(player.Hand.Cards) > 0 {
-					sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false}\n", room.Round, cardList))
+					sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
 				} else {
 					player.Wins += 1
 					room.IsStarted = false
@@ -697,14 +697,14 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 					player.CanStartGame = true
 
 					if room.Round < room.RoundCount {
-						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true}\n", room.Round, cardList))
+						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": -1}\n", room.Round, cardList))
 					} else {
 						winningPlayer, err := getWinningPlayer(room)
 
 						// If err returns non-nil, it means there's a tie and another round must be played
 						if err != nil {
 							room.RoundCount += 1
-							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true}\n", room.Round, cardList))
+							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": -1}\n", room.Round, cardList))
 						} else {
 							var playerStats []string
 							for _, player := range room.Players {
@@ -712,7 +712,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 							}
 
 							deleteRoom(rooms, room)
-							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": \"%d\", \"stats\": {%s}}\n", room.Round, cardList, winningPlayer.PlayerNumber, strings.Join(playerStats, ", ")))
+							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": %d, \"stats\": {%s}}\n", room.Round, cardList, winningPlayer.PlayerNumber, strings.Join(playerStats, ", ")))
 						}
 					}
 				}
@@ -721,7 +721,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				player.Hand.drawCard(&room.Deck)
 
 				cardList := player.listCards()
-				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": false, \"currentHand\": \"%s\", \"wonRound\": false}\n", room.Round, cardList))
+				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": false, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
 			}
 		} else {
 			sendData(conn, []byte("{\"playCard\": \"false\", \"message\": \"It is not this player's turn\"}\n"))
@@ -754,7 +754,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 			if currentPlayer == player.PlayerNumber {
 				if len(player.Hand.Cards) == 0 {
 					if room.Round < room.RoundCount {
-						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": \"%d\"}\n", room.Round, currentPlayer+1))
+						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": -1}\n", room.Round, currentPlayer+1))
 					} else {
 						winningPlayer, err := getWinningPlayer(room)
 						var playerStats []string
@@ -764,9 +764,9 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 						// If err returns non-nil, it means there's a tie and another round must be played. Don't increase round count here cause playCard block handles it
 						if err != nil {
-							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": \"%d\"}\n", room.Round, currentPlayer+1))
+							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": -1}\n", room.Round, currentPlayer+1))
 						} else {
-							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": \"%d\", \"winningGamePlayer\": \"%d\", \"stats\": {%s}}\n", room.Round, currentPlayer+1, winningPlayer.PlayerNumber, strings.Join(playerStats, ", ")))
+							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": %d, \"stats\": {%s}}\n", room.Round, currentPlayer+1, winningPlayer.PlayerNumber, strings.Join(playerStats, ", ")))
 						}
 					}
 				}
@@ -776,7 +776,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
-		sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": false}\n", room.Round))
+		sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": false, \"winningGamePlayer\": -1}\n", room.Round))
 	case "addRule":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
