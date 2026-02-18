@@ -607,9 +607,16 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Cond.L.Lock()
 		for !room.IsStarted {
 			room.Cond.Wait()
+
+			room, err := getRoom(rooms, actionDetails.RoomCode)
+			if err != nil {
+				sendData(conn, []byte("{\"action\": \"waitStart\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+				return
+			}
+
 			player.drawHand(room)
 			cardList := player.listCards()
-			sendData(conn, fmt.Appendf(nil, "{\"initialHand\": \"%s\"}\n", cardList))
+			sendData(conn, fmt.Appendf(nil, "{\"action\": \"waitStart\", \"success\": true, \"initialHand\": \"%s\"}\n", cardList))
 		}
 
 		room.Cond.Signal()
@@ -633,11 +640,34 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 			room.IsStarted = true
 			player.drawHand(room)
 			cardList := player.listCards()
-			sendData(conn, fmt.Appendf(nil, "{\"initialHand\": \"%s\"}\n", cardList))
+			sendData(conn, fmt.Appendf(nil, "{\"action\": \"startGame\", \"success\": true, \"initialHand\": \"%s\"}\n", cardList))
 		} else {
 			sendData(conn, []byte("{\"gameStarted\": \"false\", \"message\": \"Can not start game\"}\n"))
 		}
 
+		room.Cond.Signal()
+		room.Cond.L.Unlock()
+	case "cancelGame":
+		room, err := getRoom(rooms, actionDetails.RoomCode)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			return
+		}
+
+		player, err := getPlayer(room, actionDetails.PlayerID)
+		if err != nil {
+			sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			return
+		}
+
+		room.Cond.L.Lock()
+		if player.CanStartGame && !room.IsStarted {
+			room.IsStarted = true
+			deleteRoom(rooms, room)
+			sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": true}\n"))
+		} else {
+			sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": false, \"message\": \"Player did not create room.\"}\n"))
+		}
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
 	case "playCard":
