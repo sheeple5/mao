@@ -558,7 +558,7 @@ func beginGame(player *Player) (bool, error) {
 	} else {
 		printHeader([]string{"Waiting for game to start..."}, 0)
 
-		canceledGame, newHandList, err := player.waitForGameStart()
+		canceledGame, newHandList, err := player.waitStart()
 		if err != nil {
 			return false, err
 		} else if canceledGame {
@@ -683,7 +683,7 @@ func loserScreen(player *Player, roundWinner int, round int) error {
 	fmt.Println(centeredText(fmt.Sprintf("Waiting for player %d to add a new rule...", roundWinner), 0))
 	fmt.Println(strings.Repeat("─", terminalWidth))
 
-	_, newHandList, err := player.waitForGameStart()
+	_, newHandList, err := player.waitStart()
 	if err != nil {
 		return err
 	} else {
@@ -837,7 +837,7 @@ func (player Player) cancelGame() (bool, error) {
 
 // Sends a request to the server to wait for the game to start. Once the game has begun on the server side,
 // returns the players starting hand.
-func (player Player) waitForGameStart() (bool, string, error) {
+func (player Player) waitStart() (bool, string, error) {
 	netData, err := sendData(fmt.Sprintf("{\"playerID\": \"%s\", \"roomCode\": \"%s\", \"action\": \"waitStart\"}\n", player.PlayerID, player.RoomCode))
 	if err != nil {
 		return false, "", err
@@ -1075,6 +1075,7 @@ func printStats(stats map[string]int) {
 // The main driver of the program and gameplay loop.
 func main() {
 	var player Player
+	var menuMessage string
 
 	// A goroutine for user interrupts. If one occurs, has the player leave the room before exiting.
 	c := make(chan os.Signal, 1)
@@ -1101,7 +1102,8 @@ func main() {
 		}
 
 		// Presents the user with the main menu.
-		printMainMenu("")
+		printMainMenu(menuMessage)
+		menuMessage = ""
 		continueGame, err := mainMenu(&player)
 		if err != nil {
 			server.Message = "Lost connection to server."
@@ -1123,6 +1125,7 @@ func main() {
 
 		// If the who created the room canceled the game, returns back to the main menu.
 		if !gameStarted {
+			menuMessage = "Game was canceled."
 			continue
 		}
 
