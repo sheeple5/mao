@@ -1,28 +1,35 @@
 package rules
+
 import "strings"
 
+// Rules struct that allows for functions to live in a slice.
 type Rules func(card Card, deck Deck) string
+
 var rules []Rules = []Rules{baseRule}
 
+// Deck struct that holds slices of cards to be used throughout the game.
 type Deck struct {
 	Pile        []Card
 	DiscardPile []Card
 }
 
+// Card struct that defines values for its rank, suit, and combined value.
 type Card struct {
 	Rank  string
 	Suit  string
 	Value string
 }
 
+// Helper function for converting a string card value into a Card object.
 func convertCard(playedCard string) Card {
 	return Card{Rank: playedCard[:len(playedCard)-1], Suit: string(playedCard[len(playedCard)-1]), Value: playedCard}
 }
 
+// Helper function for converting a string of card values into a slice of Card objects.
 func convertPile(pile string) []Card {
-  if pile == "" {
-    return []Card{}
-  }
+	if pile == "" {
+		return []Card{}
+	}
 
 	var newPile []Card
 	for _, card := range strings.Split(pile, ",") {
@@ -31,10 +38,15 @@ func convertPile(pile string) []Card {
 	return newPile
 }
 
+// Helper function that gets the current top of the discard pile to be played on.
 func (deck Deck) getCurrentTop() Card {
 	return deck.DiscardPile[len(deck.DiscardPile)-1]
 }
 
+// Loops through each rule in the rules slice. Each rule has three return options:
+// true - the card automatically passes all rules
+// false - the card automatically fails all rules
+// continue - the card is unaffected by the current rule and moves on to the next
 func checkRules(playedCard string, deckPile string, deckDiscard string) bool {
 	card := convertCard(playedCard)
 	deck := Deck{Pile: convertPile(deckPile), DiscardPile: convertPile(deckDiscard)}
@@ -42,18 +54,20 @@ func checkRules(playedCard string, deckPile string, deckDiscard string) bool {
 	for _, rule := range rules {
 		ruleResult := rule(card, deck)
 
-		if ruleResult == "true" {
+		switch ruleResult {
+		case "true":
 			return true
-		} else if ruleResult == "false" {
+		case "false":
 			return false
-		} else if ruleResult == "continue" {
-			continue
-		} else {
+		case "continue":
 			continue
 		}
 	}
+	return true
 }
 
+// The base "Uno" rule. Played cards that match the top discarded card's
+// rank or suit pass. Otherwise, the rule has been broken.
 func baseRule(card Card, deck Deck) string {
 	currentCard := deck.getCurrentTop()
 
@@ -64,5 +78,4 @@ func baseRule(card Card, deck Deck) string {
 	} else {
 		return "false"
 	}
-} 
-
+}

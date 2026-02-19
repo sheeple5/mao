@@ -447,7 +447,7 @@ func (room *Room) updateFile(newRule string) {
 
 	// There is a slice in the rules file that holds each function name in a slice. This retrieves that slice definition.
 	currentRules := strings.Split(string(currentRulesBytes), "\n")
-	rulesSlice := currentRules[4]
+	rulesSlice := currentRules[7]
 
 	// Uses regex to search GPT's new rule and grabs the function name.
 	re := regexp.MustCompile(`^func ([a-zA-Z0-9-]+)\(`)
@@ -455,7 +455,7 @@ func (room *Room) updateFile(newRule string) {
 
 	// Adds the new function name to the rules slice in the file.
 	newRulesSlice := rulesSlice[0:28] + functionName + ", " + rulesSlice[28:]
-	currentRules[4] = newRulesSlice
+	currentRules[7] = newRulesSlice
 
 	// Writes the final rules code back onto the file.
 	finalFile := strings.Join(append(currentRules, strings.Split(newRule, "\n")...), "\n") + "\n"
