@@ -901,7 +901,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		sendData(conn, fmt.Appendf(nil, "{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().Value))
 
-	// Holds a connection open for a client waiting for the current player to play their turn, and game state data when they finish.
+	// Holds a connection open for a client waiting, for the current player to play their turn. Sends game state data when they finish.
 	case "waitTurn":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
