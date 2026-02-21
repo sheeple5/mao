@@ -20,7 +20,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/go-viper/mapstructure/v2"
 	"github.com/google/uuid"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
@@ -134,23 +133,18 @@ func sendData(conn net.Conn, payload []byte) {
 
 // Generic function for receiving data from the client, organizing the value into an "ActionDetails" struct.
 func receiveData(conn net.Conn) ActionDetails {
-	var actionDetails ActionDetails
 	netData, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
 		panic(err)
 	}
 
-	var actionData map[string]any
-	err = json.Unmarshal([]byte(netData), &actionData)
+	var actionDetails ActionDetails
+	err = json.Unmarshal([]byte(netData), &actionDetails)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
 	}
 
-	err = mapstructure.Decode(actionData, &actionDetails)
-	if err != nil {
-		panic(err)
-	}
 	return actionDetails
 }
 
@@ -412,16 +406,10 @@ func (room *Room) addRule(newRule string) bool {
 	stringBody := string(body)
 
 	// Unmarshal's GPT's response into structs that can pull the new rule code out easily.
-	var gptData map[string]any
-	err = json.Unmarshal([]byte(stringBody), &gptData)
+	var gptResponse GPTResponseObject
+	err = json.Unmarshal([]byte(stringBody), &gptResponse)
 	if err != nil {
 		fmt.Println(stringBody)
-		panic(err)
-	}
-
-	var gptResponse GPTResponseObject
-	err = mapstructure.Decode(gptData, &gptResponse)
-	if err != nil {
 		panic(err)
 	}
 
