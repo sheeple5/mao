@@ -17,12 +17,11 @@ type Deck struct {
 type Card struct {
 	Rank  string
 	Suit  string
-	Value string
 }
 
 // Helper function for converting a string card value into a Card object.
 func convertCard(playedCard string) Card {
-	return Card{Rank: playedCard[:len(playedCard)-1], Suit: string(playedCard[len(playedCard)-1]), Value: playedCard}
+	return Card{Rank: playedCard[:len(playedCard)-1], Suit: string(playedCard[len(playedCard)-1])}
 }
 
 // Helper function for converting a string of card values into a slice of Card objects.

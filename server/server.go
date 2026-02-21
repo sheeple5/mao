@@ -36,7 +36,8 @@ var (
 	draw a card. This is where you come in.
 
 	The Mao game is written in Golang and has the following two structs:
-	 - Card: Has values Rank (the rank as a string), Suit (the suit as a string [S, C, H, D]), and Value (the entire card as a string. For example, "10C")
+	 - Card: Has string values Rank (the rank as a string [A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, 2]) and Suit (the suit as a string [S, C, H, D]).
+	   - It also has a function getValue() which returns the rank and suit combined (i.e. 5H).
 	 - Deck: Has values Pile and DiscardPile where both are []Card. Obviously, pile is the list where cards are drawn from, and DiscardPile is where cards are played onto
 	  - Deck also has a function getCurrentTop() which gets the card currently "on top" in which players play on to.
 
@@ -76,16 +77,15 @@ var (
 type Room struct {
 	RoomCode     string
 	Players      map[string]*Player
+	Deck         Deck
 	GameStarted  bool
 	RoundStarted bool
-	Deck         Deck
-	HandSize     int
-	IsPrivate    bool
 	CanAddRule   bool
-	DrawTurn     int
-	PlayerTurn   int
-	Round        int
+	IsPrivate    bool
+	HandSize     int
 	RoundCount   int
+	Round        int
+	PlayerTurn   int
 	Rules        string
 	Mu           sync.Mutex
 	Cond         *sync.Cond
@@ -99,30 +99,24 @@ type Deck struct {
 
 // Player struct that holds player information
 type Player struct {
-	Hand         Hand
 	PlayerID     string
 	PlayerNumber int
 	CanStartGame bool
+	Hand         []Card
 	Wins         int
-}
-
-// Hand struct to store the cards in each player's hands.
-type Hand struct {
-	Cards []Card
 }
 
 // Card struct that defines values for its rank, suit, and combined value.
 type Card struct {
-	Rank  string
-	Suit  string
-	Value string
+	Rank string
+	Suit string
 }
 
 // ActionDetails struct for receiving and organizing data received from the client.
 type ActionDetails struct {
+	RoomCode  string
 	PlayerID  string
 	Action    string
-	RoomCode  string
 	Card      string
 	NewRule   string
 	IsPrivate bool
@@ -160,9 +154,13 @@ func receiveData(conn net.Conn) ActionDetails {
 	return actionDetails
 }
 
+func (card Card) getValue() string {
+	return card.Rank + card.Suit
+}
+
 // Helper function for converting a string card value into a Card object.
 func convertCard(playedCard string) Card {
-	return Card{Rank: playedCard[:len(playedCard)-1], Suit: string(playedCard[len(playedCard)-1]), Value: playedCard}
+	return Card{Rank: playedCard[:len(playedCard)-1], Suit: string(playedCard[len(playedCard)-1])}
 }
 
 // Receives a played card and room as input, and determines if the played card passes the rules.
@@ -170,7 +168,7 @@ func convertCard(playedCard string) Card {
 // by GPT at runtime, updating the rules file. The rules file is then interpreted and executed at runtime by yaegi.
 func rulesCheck(player Player, playedCard string, room *Room) bool {
 	// Check if card is actually in hand. If not, fails the rules check.
-	if !slices.Contains(player.Hand.Cards, convertCard(playedCard)) {
+	if !slices.Contains(player.Hand, convertCard(playedCard)) {
 		return false
 	}
 
@@ -255,7 +253,7 @@ func generateRoomCode() string {
 
 // Given a hand and a deck, takes the top card off the draw pile and puts it into the hand.
 // Will reshuffle the discard pile back in to the draw pile if the draw pile runs out of cards.
-func (hand *Hand) drawCard(deck *Deck) {
+func (player *Player) drawCard(deck *Deck) {
 	if len(deck.Pile) == 0 {
 		newPile := make([]Card, len(deck.DiscardPile)-1)
 		copy(newPile, deck.DiscardPile[:len(deck.DiscardPile)-1])
@@ -266,7 +264,7 @@ func (hand *Hand) drawCard(deck *Deck) {
 	}
 
 	drawnCard := deck.Pile[0]
-	hand.Cards = append(hand.Cards, drawnCard)
+	player.Hand = append(player.Hand, drawnCard)
 	deck.Pile = deck.Pile[1:]
 }
 
@@ -283,7 +281,7 @@ func (player *Player) drawHand(room *Room) {
 	hand := make([]Card, room.HandSize)
 	copy(hand, room.Deck.Pile[:room.HandSize])
 
-	player.Hand.Cards = hand
+	player.Hand = hand
 	room.Deck.Pile = room.Deck.Pile[room.HandSize:]
 }
 
@@ -291,8 +289,8 @@ func (player *Player) drawHand(room *Room) {
 // This is useful for sending the hand data to the client and converting into objects for yaegi.
 func (player Player) listCards() string {
 	cardValues := []string{}
-	for _, card := range player.Hand.Cards {
-		cardValues = append(cardValues, card.Value)
+	for _, card := range player.Hand {
+		cardValues = append(cardValues, card.getValue())
 	}
 	return strings.Join(cardValues, ", ")
 }
@@ -302,7 +300,7 @@ func initializeDeck() Deck {
 	pile := []Card{}
 	for _, suit := range []string{"S", "C", "H", "D"} {
 		for _, rank := range []string{"A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"} {
-			newCard := Card{Rank: rank, Suit: suit, Value: rank + suit}
+			newCard := Card{Rank: rank, Suit: suit}
 			pile = append(pile, newCard)
 		}
 	}
@@ -337,7 +335,7 @@ func (deck Deck) listCards(pileType string) string {
 	}
 
 	for _, card := range pile {
-		cardValues = append(cardValues, card.Value)
+		cardValues = append(cardValues, card.getValue())
 	}
 	return strings.Join(cardValues, ",")
 }
@@ -515,7 +513,7 @@ func leaveRoom(rooms map[string]*Room, room *Room, player Player) {
 	}
 
 	// Adds the cards from the player's hand to the bottom of the draw pile.
-	room.Deck.Pile = append(room.Deck.Pile, player.Hand.Cards...)
+	room.Deck.Pile = append(room.Deck.Pile, player.Hand...)
 	delete(room.Players, player.PlayerID)
 
 	// If the leaving player is the last in the room, deletes the entire room.
@@ -819,21 +817,21 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		if player.PlayerNumber == room.PlayerTurn {
 			// If the player chose to draw, draw a card and respond to the client with the updated hand.
 			if playedCard == "draw" {
-				player.Hand.drawCard(&room.Deck)
+				player.drawCard(&room.Deck)
 
 				cardList := player.listCards()
 				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
 				room.PlayerTurn = getNextTurn(room)
 			} else if rulesCheck(*player, playedCard, room) {
 				// If the player played a card that passed the rules of the room, pop the card from the player's hand, along with updating the deck's discard pile.
-				popIndex := slices.Index(player.Hand.Cards, convertCard(playedCard))
+				popIndex := slices.Index(player.Hand, convertCard(playedCard))
 
-				room.Deck.DiscardPile = append(room.Deck.DiscardPile, player.Hand.Cards[popIndex])
-				player.Hand.Cards = slices.Delete(player.Hand.Cards, popIndex, popIndex+1)
+				room.Deck.DiscardPile = append(room.Deck.DiscardPile, player.Hand[popIndex])
+				player.Hand = slices.Delete(player.Hand, popIndex, popIndex+1)
 
 				// If the player still has cards in their hand, send the updated hand back to the client.
 				cardList := player.listCards()
-				if len(player.Hand.Cards) > 0 {
+				if len(player.Hand) > 0 {
 					sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
 				} else {
 					// If the player has no cards in hand, then they won the round. Initialize a new deck for the next round and set other room states.
@@ -844,10 +842,10 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 					room.Deck = initializeDeck()
 
 					// Reduces each player's hand to zero cards and sets the winning player to be able to start the game.
-					for _, allPlayer := range room.Players {
-						allPlayer.Hand.Cards = allPlayer.Hand.Cards[:0]
-						if allPlayer.CanStartGame {
-							allPlayer.CanStartGame = false
+					for _, roomPlayer := range room.Players {
+						roomPlayer.Hand = roomPlayer.Hand[:0]
+						if roomPlayer.CanStartGame {
+							roomPlayer.CanStartGame = false
 						}
 					}
 					player.CanStartGame = true
@@ -878,7 +876,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				room.PlayerTurn = getNextTurn(room)
 			} else {
 				// If the played card broke a rule, the player draws a card and plays again.
-				player.Hand.drawCard(&room.Deck)
+				player.drawCard(&room.Deck)
 
 				cardList := player.listCards()
 				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": false, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
@@ -899,7 +897,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 			return
 		}
 
-		sendData(conn, fmt.Appendf(nil, "{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().Value))
+		sendData(conn, fmt.Appendf(nil, "{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().getValue()))
 
 	// Holds a connection open for a client waiting for the current player to play their turn. Sends game state data when they finish.
 	case "waitTurn":
@@ -919,7 +917,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		// Checks to see if the current player has zero cards left in hand.
 		for _, player := range room.Players {
 			if currentPlayer == player.PlayerNumber {
-				if len(player.Hand.Cards) == 0 {
+				if len(player.Hand) == 0 {
 					// If there are more rounds to be played, respond to the client that the last player won the round, but without a game winner.
 					if room.Round < room.RoundCount {
 						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": -1}\n", room.Round, currentPlayer+1))
@@ -968,7 +966,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 		// Validate the received player actually won by checking their card count.
 		// Also uses a room attribute to determine if a rule has been added yet this round. That way, multiple rules can't be added per won round.
-		if len(player.Hand.Cards) == 0 && room.CanAddRule {
+		if len(player.Hand) == 0 && room.CanAddRule {
 			room.CanAddRule = false
 			success := room.addRule(newRule)
 
