@@ -1,0 +1,11 @@
+services:
+  mao:
+    build:
+      context: .  
+      dockerfile: Dockerfile
+    image: mao
+    environment:
+      OPENAI_TOKEN: ${OPENAI_TOKEN}
+    ports:
+      - "9090:9090"
+    container_name: mao
