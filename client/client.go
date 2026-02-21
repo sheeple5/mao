@@ -14,7 +14,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/go-viper/mapstructure/v2"
 	"golang.org/x/term"
 )
 
@@ -138,15 +137,9 @@ func getHealthCheck() bool {
 	}
 
 	var healthDetails HealthDetails
-	var healthData map[string]any
-	err = json.Unmarshal([]byte(netData), &healthData)
+	err = json.Unmarshal([]byte(netData), &healthDetails)
 	if err != nil {
 		fmt.Println(netData)
-		panic(err)
-	}
-
-	err = mapstructure.Decode(healthData, &healthDetails)
-	if err != nil {
 		panic(err)
 	}
 
@@ -700,17 +693,12 @@ func createRoom(player *Player, isPrivate bool, numRounds int, handSize int) err
 		return err
 	}
 
-	var playerData map[string]any
-	err = json.Unmarshal([]byte(netData), &playerData)
+	err = json.Unmarshal([]byte(netData), player)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
 	}
 
-	err = mapstructure.Decode(playerData, &player)
-	if err != nil {
-		panic(err)
-	}
 	return nil
 }
 
@@ -728,15 +716,9 @@ func joinRoom(player *Player, roomCode string) (bool, error) {
 	}
 
 	var joinDetails JoinDetails
-	var joinData map[string]any
-	err = json.Unmarshal([]byte(netData), &joinData)
+	err = json.Unmarshal([]byte(netData), &joinDetails)
 	if err != nil {
 		fmt.Println(netData)
-		panic(err)
-	}
-
-	err = mapstructure.Decode(joinData, &joinDetails)
-	if err != nil {
 		panic(err)
 	}
 
@@ -768,17 +750,12 @@ func getRooms() (string, error) {
 	}
 
 	var roomsDetails RoomsDetails
-	var roomsData map[string]any
-	err = json.Unmarshal([]byte(netData), &roomsData)
+	err = json.Unmarshal([]byte(netData), &roomsDetails)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
 	}
 
-	err = mapstructure.Decode(roomsData, &roomsDetails)
-	if err != nil {
-		panic(err)
-	}
 	return roomsDetails.Rooms, nil
 }
 
@@ -795,17 +772,12 @@ func (player Player) startGame() (string, error) {
 	}
 
 	var initialHandDetails InitialHandDetails
-	var handData map[string]any
-	err = json.Unmarshal([]byte(netData), &handData)
+	err = json.Unmarshal([]byte(netData), &initialHandDetails)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
 	}
 
-	err = mapstructure.Decode(handData, &initialHandDetails)
-	if err != nil {
-		panic(err)
-	}
 	return initialHandDetails.InitialHand, nil
 }
 
@@ -821,17 +793,12 @@ func (player Player) cancelGame() (bool, error) {
 	}
 
 	var cancelDetails CancelDetails
-	var cancelData map[string]any
-	err = json.Unmarshal([]byte(netData), &cancelData)
+	err = json.Unmarshal([]byte(netData), &cancelDetails)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
 	}
 
-	err = mapstructure.Decode(cancelData, &cancelDetails)
-	if err != nil {
-		panic(err)
-	}
 	return cancelDetails.Success, nil
 }
 
@@ -849,17 +816,12 @@ func (player Player) waitStart() (bool, string, error) {
 	}
 
 	var initialHandDetails InitialHandDetails
-	var handData map[string]any
-	err = json.Unmarshal([]byte(netData), &handData)
+	err = json.Unmarshal([]byte(netData), &initialHandDetails)
 	if err != nil {
 		fmt.Println(netData)
 		panic(err)
 	}
 
-	err = mapstructure.Decode(handData, &initialHandDetails)
-	if err != nil {
-		panic(err)
-	}
 	return !initialHandDetails.Success, initialHandDetails.InitialHand, nil
 }
 
@@ -877,15 +839,9 @@ func (player Player) requestTurn() (int, string, error) {
 	}
 
 	var requestTurnDetails RequestTurnDetails
-	var turnData map[string]any
-	err = json.Unmarshal([]byte(netData), &turnData)
+	err = json.Unmarshal([]byte(netData), &requestTurnDetails)
 	if err != nil {
 		fmt.Println(netData)
-		panic(err)
-	}
-
-	err = mapstructure.Decode(turnData, &requestTurnDetails)
-	if err != nil {
 		panic(err)
 	}
 
@@ -910,15 +866,9 @@ func (player Player) waitTurn() (bool, int, int, int, map[string]int, error) {
 	}
 
 	var gameWonDetails GameWonDetails
-	var gameData map[string]any
-	err = json.Unmarshal([]byte(netData), &gameData)
+	err = json.Unmarshal([]byte(netData), &gameWonDetails)
 	if err != nil {
 		fmt.Println(netData)
-		panic(err)
-	}
-
-	err = mapstructure.Decode(gameData, &gameWonDetails)
-	if err != nil {
 		panic(err)
 	}
 
@@ -948,15 +898,9 @@ func (player Player) playCard(playedCard string) (bool, string, bool, int, int, 
 	}
 
 	var ruleCheckResults RuleCheckResults
-	var ruleData map[string]any
-	err = json.Unmarshal([]byte(netData), &ruleData)
+	err = json.Unmarshal([]byte(netData), &ruleCheckResults)
 	if err != nil {
 		fmt.Println(netData)
-		panic(err)
-	}
-
-	err = mapstructure.Decode(ruleData, &ruleCheckResults)
-	if err != nil {
 		panic(err)
 	}
 
@@ -976,15 +920,9 @@ func (player Player) addRule(newRule string) (bool, error) {
 	}
 
 	var addRuleResults AddRuleResults
-	var ruleData map[string]any
-	err = json.Unmarshal([]byte(netData), &ruleData)
+	err = json.Unmarshal([]byte(netData), &addRuleResults)
 	if err != nil {
 		fmt.Println(netData)
-		panic(err)
-	}
-
-	err = mapstructure.Decode(ruleData, &addRuleResults)
-	if err != nil {
 		panic(err)
 	}
 
@@ -1003,15 +941,9 @@ func (player Player) getStats() (map[string]int, error) {
 	}
 
 	var stats Stats
-	var statsData map[string]any
-	err = json.Unmarshal([]byte(netData), &statsData)
+	err = json.Unmarshal([]byte(netData), &stats)
 	if err != nil {
 		fmt.Println(netData)
-		panic(err)
-	}
-
-	err = mapstructure.Decode(statsData, &stats)
-	if err != nil {
 		panic(err)
 	}
 
