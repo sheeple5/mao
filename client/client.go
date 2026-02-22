@@ -37,37 +37,44 @@ type Server struct {
 var server Server
 
 // Helper function to request and return user input
-func input(text string) string {
+func input(text string) (string, error) {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Print(text)
 	response, err := reader.ReadString('\n')
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
-	return strings.TrimSpace(response)
+	return strings.TrimSpace(response), nil
 }
 
 // Helper function that gets the current terminal dimensions. Helps for printing UI.
-func getTerminalDimensions() (int, int) {
+func getTerminalDimensions() (int, int, error) {
 	fd := int(os.Stdout.Fd())
 	terminalWidth, terminalHeight, err := term.GetSize(fd)
 	if err != nil {
-		panic(err)
+		return 0, 0, err
 	}
-	return terminalWidth, terminalHeight
+	return terminalWidth, terminalHeight, nil
 }
 
 // Helper function that determines how much padding text needs in order for it to be centered.
 // Includes an offset parameter for bumping text left if there is left aligned text.
-func getPadding(text string, offset int) string {
-	terminalWidth, _ := getTerminalDimensions()
-	return strings.Repeat(" ", (terminalWidth/2)-(len(text)/2)-offset)
+func getPadding(text string, offset int) (string, error) {
+	terminalWidth, _, err := getTerminalDimensions()
+	if err != nil {
+		return "", err
+	}
+	return strings.Repeat(" ", (terminalWidth/2)-(len(text)/2)-offset), nil
 }
 
 // Helper function that utilizes getPadding to return a text prepended with enough padding to center it on the screen.
-func centeredText(text string, offset int) string {
-	return getPadding(text, offset) + text
+func centeredText(text string, offset int) (string, error) {
+	padding, err := getPadding(text, offset)
+	if err != nil {
+		return "", err
+	}
+	return padding + text, nil
 }
 
 // Generic function for sending data to the server and receiving a response.
@@ -103,21 +110,29 @@ func sendData(payload string) (string, error) {
 }
 
 // First screen for selecting the server used for the game.
-func chooseServer() {
+func chooseServer() error {
 	for {
-		printHeader([]string{server.Message}, 1)
+		err := printHeader([]string{server.Message}, 1)
+		if err != nil {
+			return err
+		}
 
-		server.IP = input("Enter a server IP (or exit to exit): ")
+		serverIP, err := input("Enter a server IP (or exit to exit): ")
+		if err != nil {
+			return err
+		}
 		if slices.Contains([]string{"exit", "EXIT", "e", "E"}, server.IP) {
 			// If exit is chosen, return. In main, server.IP is checked for exit to quit the program.
-			return
+			server.IP = serverIP
+			return nil
 		}
 
 		// After choosing an IP, runs a health check to see if the chosen server actually hosts Mao.
 		if getHealthCheck() {
+			server.IP = serverIP
 			server.Message = ""
 			server.LostConnection = false
-			return
+			return nil
 		} else {
 			server.Message = fmt.Sprintf("Could not connect to server %s", server.IP)
 		}
@@ -139,8 +154,7 @@ func getHealthCheck() bool {
 	var healthDetails HealthDetails
 	err = json.Unmarshal([]byte(netData), &healthDetails)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return false
 	}
 
 	if healthDetails.Service == "Mao Game" && healthDetails.Success {
@@ -153,7 +167,7 @@ func getHealthCheck() bool {
 // Prints and centers the correctly sized Mao logo depending on the current terminal size.
 // extraLines is passed to help assess the number of vertical lines on the screen, which will between
 // the height of the logo along with however many other lines the function utilizing this adds.
-func printLogo(extraLines int) {
+func printLogo(extraLines int) error {
 	titleLarge := `          _____                    _____                   _______         
          /\    \                  /\    \                 /::\    \        
         /::\____\                /::\    \               /::::\    \       
@@ -211,7 +225,11 @@ func printLogo(extraLines int) {
 	titleTinyLines := strings.Split(titleTiny, "\n")
 
 	var printTitle []string
-	terminalWidth, terminalHeight := getTerminalDimensions()
+	terminalWidth, terminalHeight, err := getTerminalDimensions()
+	if err != nil {
+		return err
+	}
+
 	if terminalWidth > len(titleLargeLines[0]) && terminalHeight > len(titleLargeLines)+extraLines {
 		printTitle = titleLargeLines
 	} else if terminalWidth > len(titleMediumLines[0]) && terminalHeight > len(titleMediumLines)+extraLines {
@@ -227,45 +245,82 @@ func printLogo(extraLines int) {
 		titlePadding := strings.Repeat(" ", (terminalWidth/2)-(utf8.RuneCountInString(line)/2))
 		fmt.Printf("%s%s\n", titlePadding, line)
 	}
+	return nil
 }
 
 // Prints the header, which is essentially the logo along with any number of messages.
 // Messages are passed as a list and are separated by horizontal lines.
-func printHeader(messages []string, extraLines int) {
+func printHeader(messages []string, extraLines int) error {
 	extraLines += 1 + (len(messages) * 2)
-	printLogo(extraLines)
+	err := printLogo(extraLines)
+	if err != nil {
+		return err
+	}
 
-	terminalWidth, _ := getTerminalDimensions()
+	terminalWidth, _, err := getTerminalDimensions()
+	if err != nil {
+		return err
+	}
+
 	fmt.Println(strings.Repeat("─", terminalWidth))
 
 	for _, message := range messages {
 		if message != "" {
-			fmt.Printf("%s\n", centeredText(message, 0))
+			centeredMessage, err := centeredText(message, 0)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("%s\n", centeredMessage)
 			fmt.Println(strings.Repeat("─", terminalWidth))
 		}
 	}
+	return nil
 }
 
 // Prints the main menu and its options. Doesn't use printHeader as it needs to print horizontal lines
 // joined by some vertical elements for the left menu options.
-func printMainMenu(message string) {
-	printLogo(7)
+func printMainMenu(message string) error {
+	err := printLogo(7)
+	if err != nil {
+		return err
+	}
 
-	terminalWidth, _ := getTerminalDimensions()
+	terminalWidth, _, err := getTerminalDimensions()
+	if err != nil {
+		return err
+	}
+
+	centeredServer, err := centeredText(fmt.Sprintf("Current Server: %s", server.IP), 0)
+	if err != nil {
+		return err
+	}
+
 	fmt.Println(strings.Repeat("─", terminalWidth))
-	fmt.Printf("%s\n", centeredText(fmt.Sprintf("Current Server: %s", server.IP), 0))
+	fmt.Printf("%s\n", centeredServer)
 	fmt.Println("─┬" + strings.Repeat("─", terminalWidth-2))
 
 	menuOptions := []string{"Create a new room", "Join a room", "Exit"}
 	for i, menuOption := range menuOptions {
-		fmt.Printf("%d│%s\n", i+1, centeredText(menuOption, 2))
+		centeredOption, err := centeredText(menuOption, 2)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("%d│%s\n", i+1, centeredOption)
 	}
 	fmt.Println("─┴" + strings.Repeat("─", terminalWidth-2))
 
 	if message != "" {
-		fmt.Printf("%s\n", centeredText(message, 0))
+		centeredMessage, err := centeredText(message, 0)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("%s\n", centeredMessage)
 		fmt.Println(strings.Repeat("─", terminalWidth))
 	}
+	return nil
 }
 
 // The interactive portion of the main menu. It has the following options:
@@ -273,7 +328,11 @@ func printMainMenu(message string) {
 // Join - Allows a user to join an already created room.
 // Exit - Allows a user to go back to the server selection screen.
 func mainMenu(player *Player) (bool, error) {
-	choice := input("Choose a menu option: ")
+	choice, err := input("Choose a menu option: ")
+	if err != nil {
+		return false, err
+	}
+
 	for {
 		if !slices.Contains([]string{
 			"1", "2", "3",
@@ -281,8 +340,15 @@ func mainMenu(player *Player) (bool, error) {
 			"join", "JOIN", "j", "J",
 			"exit", "EXIT", "e", "E",
 		}, choice) {
-			printMainMenu("Error, please choose a valid menu option.")
-			choice = input("Choose a menu option: ")
+			err := printMainMenu("Error, please choose a valid menu option.")
+			if err != nil {
+				return false, err
+			}
+
+			choice, err = input("Choose a menu option: ")
+			if err != nil {
+				return false, err
+			}
 		} else {
 			break
 		}
@@ -294,7 +360,10 @@ func mainMenu(player *Player) (bool, error) {
 		numRounds := 5
 		handSize := 7
 
-		doCreate := createOptions(&isPrivate, &numRounds, &handSize)
+		doCreate, err := createOptions(&isPrivate, &numRounds, &handSize)
+		if err != nil {
+			return false, err
+		}
 
 		// If a user has chosen to create the room, create it with the specified values and continue with the game.
 		// Otherwise, return false (which returns to the main menu in the main function loop).
@@ -331,8 +400,12 @@ func mainMenu(player *Player) (bool, error) {
 }
 
 // Prints menu options for the room creation screen.
-func printRoomMenu(isPrivate bool, numRounds int, handSize int, message string) {
-	terminalWidth, _ := getTerminalDimensions()
+func printRoomMenu(isPrivate bool, numRounds int, handSize int, message string) error {
+	terminalWidth, _, err := getTerminalDimensions()
+	if err != nil {
+		return err
+	}
+
 	extraLines := 10
 	if message != "" {
 		extraLines += 2
@@ -345,23 +418,64 @@ func printRoomMenu(isPrivate bool, numRounds int, handSize int, message string) 
 		publicOption = "Public"
 	}
 
-	printLogo(extraLines)
+	err = printLogo(extraLines)
+	if err != nil {
+		return err
+	}
+
 	fmt.Println(strings.Repeat("─", terminalWidth))
-	fmt.Printf("%s\n", centeredText("Room Options", 0))
+
+	centeredOptions, err := centeredText("Room Options", 0)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%s\n", centeredOptions)
 	fmt.Println("─┬" + strings.Repeat("─", terminalWidth-2))
 
-	fmt.Printf("1│%s\n", centeredText(fmt.Sprintf("Set Public/Private: %s", publicOption), 2))
-	fmt.Printf("2│%s\n", centeredText(fmt.Sprintf("Change Number of Rounds: %d", numRounds), 2))
-	fmt.Printf("3│%s\n", centeredText(fmt.Sprintf("Change Initial Hand Size: %d", handSize), 2))
+	centeredPublic, err := centeredText(fmt.Sprintf("Set Public/Private: %s", publicOption), 2)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("1│%s\n", centeredPublic)
+
+	centeredRounds, err := centeredText(fmt.Sprintf("Change Number of Rounds: %d", numRounds), 2)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("2│%s\n", centeredRounds)
+
+	centeredHand, err := centeredText(fmt.Sprintf("Change Initial Hand Size: %d", handSize), 2)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("3│%s\n", centeredHand)
+
 	fmt.Println("─┼" + strings.Repeat("─", terminalWidth-2))
-	fmt.Printf("C│%s\n", centeredText("Create room", 2))
-	fmt.Printf("E│%s\n", centeredText("Return to main menu", 2))
+
+	centeredCreate, err := centeredText("Create room", 2)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("C│%s\n", centeredCreate)
+
+	centeredExit, err := centeredText("Return to main menu", 2)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("E│%s\n", centeredExit)
 	fmt.Println("─┴" + strings.Repeat("─", terminalWidth-2))
 
 	if message != "" {
-		fmt.Printf("%s\n", centeredText(message, 0))
+		centeredMessage, err := centeredText(message, 0)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("%s\n", centeredMessage)
 		fmt.Println(strings.Repeat("─", terminalWidth))
 	}
+	return nil
 }
 
 // The interactive portion of the room creation menu menu. It has the following options:
@@ -370,14 +484,20 @@ func printRoomMenu(isPrivate bool, numRounds int, handSize int, message string) 
 // Public/Private - Allows a user to specify if the created room appears in the join room menu.
 // Rounds - Allows a user to specify how many rounds to play in the game.
 // handSize - Allows a user to specify how many cards each player starts a round with.
-func createOptions(isPrivate *bool, numRounds *int, handSize *int) bool {
-	choice := ""
+func createOptions(isPrivate *bool, numRounds *int, handSize *int) (bool, error) {
 	errorMessage := ""
 
 	for {
-		printRoomMenu(*isPrivate, *numRounds, *handSize, errorMessage)
+		err := printRoomMenu(*isPrivate, *numRounds, *handSize, errorMessage)
+		if err != nil {
+			return false, err
+		}
 
-		choice = input("Choose a menu option: ")
+		choice, err := input("Choose a menu option: ")
+		if err != nil {
+			return false, err
+		}
+
 		if !slices.Contains([]string{
 			"1", "2", "3",
 			"c", "C", "create", "CREATE",
@@ -394,15 +514,22 @@ func createOptions(isPrivate *bool, numRounds *int, handSize *int) bool {
 
 		switch choice {
 		case "c", "C", "create", "CREATE":
-			return true
+			return true, nil
 		case "e", "E", "exit", "EXIT":
-			return false
+			return false, nil
 		case "1", "public", "private":
-			var privateChoice string
 			messages := []string{"Set Public/Private"}
 			for {
-				printHeader(messages, 1)
-				privateChoice = input("Choose Public or Private (public/private): ")
+				err := printHeader(messages, 1)
+				if err != nil {
+					return false, err
+				}
+
+				privateChoice, err := input("Choose Public or Private (public/private): ")
+				if err != nil {
+					return false, err
+				}
+
 				if privateChoice != "public" && privateChoice != "private" {
 					if len(messages) < 2 {
 						messages = append(messages, "Error, please choose \"public\" or \"private\".")
@@ -419,11 +546,18 @@ func createOptions(isPrivate *bool, numRounds *int, handSize *int) bool {
 				break
 			}
 		case "2", "round", "rounds":
-			var inputRounds string
 			messages := []string{"Set Number of Rounds"}
 			for {
-				printHeader(messages, 1)
-				inputRounds = input("Enter the number of rounds to play: ")
+				err := printHeader(messages, 1)
+				if err != nil {
+					return false, err
+				}
+
+				inputRounds, err := input("Enter the number of rounds to play: ")
+				if err != nil {
+					return false, err
+				}
+
 				intRounds, err := strconv.Atoi(inputRounds)
 				if err != nil {
 					if len(messages) < 2 {
@@ -447,11 +581,18 @@ func createOptions(isPrivate *bool, numRounds *int, handSize *int) bool {
 				}
 			}
 		case "3", "hand", "handsize":
-			var inputHand string
 			messages := []string{"Set Initial Hand Size"}
 			for {
-				printHeader(messages, 1)
-				inputHand = input("Enter the number of cards to start the game with: ")
+				err := printHeader(messages, 1)
+				if err != nil {
+					return false, err
+				}
+
+				inputHand, err := input("Enter the number of cards to start the game with: ")
+				if err != nil {
+					return false, err
+				}
+
 				intHand, err := strconv.Atoi(inputHand)
 				if err != nil {
 					if len(messages) < 2 {
@@ -494,9 +635,16 @@ func joinOptions(player *Player) (bool, error) {
 		if errorMessage != "" {
 			messages = append(messages, errorMessage)
 		}
-		printHeader(messages, 1)
+		err = printHeader(messages, 1)
+		if err != nil {
+			return false, err
+		}
 
-		roomCode := input("Enter a room code: ")
+		roomCode, err := input("Enter a room code: ")
+		if err != nil {
+			return false, err
+		}
+
 		if slices.Contains([]string{"exit", "EXIT", "e", "E"}, roomCode) {
 			return false, nil
 		}
@@ -518,7 +666,6 @@ func joinOptions(player *Player) (bool, error) {
 // If the player created the room, they can start the game by entering Y or cancel it with N.
 // If the player joined the room, they simply wait until they receive the go ahead from the server.
 func beginGame(player *Player) (bool, error) {
-	var choice string
 	errorMessage := ""
 	if player.CanStartGame {
 		for {
@@ -526,9 +673,16 @@ func beginGame(player *Player) (bool, error) {
 			if errorMessage != "" {
 				messages = append(messages, errorMessage)
 			}
-			printHeader(messages, 1)
+			err := printHeader(messages, 1)
+			if err != nil {
+				return false, err
+			}
 
-			choice = input("Press Y to start the game: ")
+			choice, err := input("Press Y to start the game: ")
+			if err != nil {
+				return false, err
+			}
+
 			switch choice {
 			case "y", "Y", "yes", "YES", "start", "START", "c", "C", "create", "CREATE":
 				newHandList, err := player.startGame()
@@ -549,7 +703,10 @@ func beginGame(player *Player) (bool, error) {
 			}
 		}
 	} else {
-		printHeader([]string{"Waiting for game to start..."}, 0)
+		err := printHeader([]string{"Waiting for game to start..."}, 0)
+		if err != nil {
+			return false, err
+		}
 
 		canceledGame, newHandList, err := player.waitStart()
 		if err != nil {
@@ -568,13 +725,26 @@ func beginGame(player *Player) (bool, error) {
 func playTurn(player *Player, turnPlayerNumber int, turnTopCard string, gameMessage string) (bool, bool, int, int, map[string]int, error) {
 	var playedCard string
 	for {
-		printTurn(*player, turnPlayerNumber+1, turnTopCard, gameMessage)
+		err := printTurn(*player, turnPlayerNumber+1, turnTopCard, gameMessage)
+		if err != nil {
+			return true, false, -1, 0, make(map[string]int), err
+		}
+
 		for {
-			playedCard = input("Choose a card to play (or 'draw' to draw): ")
-			if !slices.Contains(strings.Split(player.Hand, ", "), playedCard) && playedCard != "draw" && playedCard != "leave" {
+			chooseCard, err := input("Choose a card to play (or 'draw' to draw): ")
+			if err != nil {
+				return true, false, -1, 0, make(map[string]int), err
+			}
+
+			if !slices.Contains(strings.Split(player.Hand, ", "), chooseCard) && chooseCard != "draw" && chooseCard != "leave" {
 				gameMessage = "Error: The card you entered is not in hand."
-				printTurn(*player, turnPlayerNumber+1, turnTopCard, gameMessage)
+				err = printTurn(*player, turnPlayerNumber+1, turnTopCard, gameMessage)
+				if err != nil {
+					return true, false, -1, 0, make(map[string]int), err
+				}
+
 			} else {
+				playedCard = chooseCard
 				break
 			}
 		}
@@ -602,14 +772,30 @@ func playTurn(player *Player, turnPlayerNumber int, turnTopCard string, gameMess
 }
 
 // Prints the end game screen whenever a player has won.
-func endScreen(player Player, winner int, stats map[string]int) {
+func endScreen(player Player, winner int, stats map[string]int) error {
+	var winMessage string
 	if winner == player.PlayerNumber {
-		printHeader([]string{"You won the game!"}, len(stats)+2)
+		winMessage = "You won the game!"
 	} else {
-		printHeader([]string{fmt.Sprintf("Game Over. Player %d wins!", winner+1)}, len(stats)+2)
+		winMessage = fmt.Sprintf("Game Over. Player %d wins!", winner+1)
 	}
-	printStats(stats)
-	_ = input("Enter anything to leave the game: ")
+
+	err := printHeader([]string{winMessage}, len(stats)+2)
+	if err != nil {
+		return err
+	}
+
+	err = printStats(stats)
+	if err != nil {
+		return err
+	}
+
+	_, err = input("Enter anything to leave the game: ")
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Prints the round winning screen along with allowing the player to add a new rule to the current Mao game.
@@ -621,10 +807,21 @@ func winnerScreen(player *Player, round int) (bool, string, error) {
 		return true, "", err
 	}
 
-	printHeader([]string{fmt.Sprintf("You won Round %d!", round)}, len(stats)+2)
-	printStats(stats)
+	err = printHeader([]string{fmt.Sprintf("You won Round %d!", round)}, len(stats)+2)
+	if err != nil {
+		return true, "", err
+	}
 
-	newRule := input("As your reward, describe a new rule to add to the game: ")
+	err = printStats(stats)
+	if err != nil {
+		return true, "", err
+	}
+
+	newRule, err := input("As your reward, describe a new rule to add to the game: ")
+	if err != nil {
+		return true, "", err
+	}
+
 	if newRule == "leave" {
 		err := player.leaveRoom()
 		if err != nil {
@@ -654,11 +851,26 @@ func winnerScreen(player *Player, round int) (bool, string, error) {
 }
 
 // Prints the waiting screen for when a player is waiting for their turn.
-func waitingScreen(player Player, turnPlayerNumber int, turnTopCard string, gameMessage string) {
-	printTurn(player, turnPlayerNumber+1, turnTopCard, gameMessage)
-	terminalWidth, _ := getTerminalDimensions()
-	fmt.Println(centeredText("Waiting for turn...", 0))
+func waitingScreen(player Player, turnPlayerNumber int, turnTopCard string, gameMessage string) error {
+	err := printTurn(player, turnPlayerNumber+1, turnTopCard, gameMessage)
+	if err != nil {
+		return err
+	}
+
+	terminalWidth, _, err := getTerminalDimensions()
+	if err != nil {
+		return err
+	}
+
+	centeredWaiting, err := centeredText("Waiting for turn...", 0)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(centeredWaiting)
 	fmt.Println(strings.Repeat("─", terminalWidth))
+
+	return nil
 }
 
 // Prints the losing screen if the player lost the round and
@@ -668,12 +880,28 @@ func loserScreen(player *Player, roundWinner int, round int) error {
 	if err != nil {
 		return err
 	}
-	terminalWidth, _ := getTerminalDimensions()
-	message := fmt.Sprintf("Player %d won Round %d.", roundWinner, round)
-	printHeader([]string{message}, len(stats)+2)
-	printStats(stats)
+	terminalWidth, _, err := getTerminalDimensions()
+	if err != nil {
+		return err
+	}
 
-	fmt.Println(centeredText(fmt.Sprintf("Waiting for player %d to add a new rule...", roundWinner), 0))
+	message := fmt.Sprintf("Player %d won Round %d.", roundWinner, round)
+	err = printHeader([]string{message}, len(stats)+2)
+	if err != nil {
+		return err
+	}
+
+	err = printStats(stats)
+	if err != nil {
+		return err
+	}
+
+	centeredWaiting, err := centeredText(fmt.Sprintf("Waiting for player %d to add a new rule...", roundWinner), 0)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(centeredWaiting)
 	fmt.Println(strings.Repeat("─", terminalWidth))
 
 	_, newHandList, err := player.waitStart()
@@ -695,8 +923,7 @@ func createRoom(player *Player, isPrivate bool, numRounds int, handSize int) err
 
 	err = json.Unmarshal([]byte(netData), player)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return err
 	}
 
 	return nil
@@ -718,8 +945,7 @@ func joinRoom(player *Player, roomCode string) (bool, error) {
 	var joinDetails JoinDetails
 	err = json.Unmarshal([]byte(netData), &joinDetails)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return false, err
 	}
 
 	if !joinDetails.Success {
@@ -752,8 +978,7 @@ func getRooms() (string, error) {
 	var roomsDetails RoomsDetails
 	err = json.Unmarshal([]byte(netData), &roomsDetails)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return "", err
 	}
 
 	return roomsDetails.Rooms, nil
@@ -774,8 +999,7 @@ func (player Player) startGame() (string, error) {
 	var initialHandDetails InitialHandDetails
 	err = json.Unmarshal([]byte(netData), &initialHandDetails)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return "", err
 	}
 
 	return initialHandDetails.InitialHand, nil
@@ -795,8 +1019,7 @@ func (player Player) cancelGame() (bool, error) {
 	var cancelDetails CancelDetails
 	err = json.Unmarshal([]byte(netData), &cancelDetails)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return false, err
 	}
 
 	return cancelDetails.Success, nil
@@ -818,8 +1041,7 @@ func (player Player) waitStart() (bool, string, error) {
 	var initialHandDetails InitialHandDetails
 	err = json.Unmarshal([]byte(netData), &initialHandDetails)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return false, "", err
 	}
 
 	return !initialHandDetails.Success, initialHandDetails.InitialHand, nil
@@ -841,8 +1063,7 @@ func (player Player) requestTurn() (int, string, error) {
 	var requestTurnDetails RequestTurnDetails
 	err = json.Unmarshal([]byte(netData), &requestTurnDetails)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return 0, "", err
 	}
 
 	fmt.Println(requestTurnDetails.PlayerNumber)
@@ -868,8 +1089,7 @@ func (player Player) waitTurn() (bool, int, int, int, map[string]int, error) {
 	var gameWonDetails GameWonDetails
 	err = json.Unmarshal([]byte(netData), &gameWonDetails)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return false, 0, 0, 0, make(map[string]int), err
 	}
 
 	return gameWonDetails.WonRound, gameWonDetails.WinningRoundPlayer, gameWonDetails.WinningGamePlayer, gameWonDetails.Round, gameWonDetails.Stats, nil
@@ -900,8 +1120,7 @@ func (player Player) playCard(playedCard string) (bool, string, bool, int, int, 
 	var ruleCheckResults RuleCheckResults
 	err = json.Unmarshal([]byte(netData), &ruleCheckResults)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return false, "", false, -1, 0, make(map[string]int), err
 	}
 
 	return ruleCheckResults.RulesPassed, ruleCheckResults.CurrentHand, ruleCheckResults.WonRound, ruleCheckResults.Winner, ruleCheckResults.Round, ruleCheckResults.Stats, nil
@@ -922,8 +1141,7 @@ func (player Player) addRule(newRule string) (bool, error) {
 	var addRuleResults AddRuleResults
 	err = json.Unmarshal([]byte(netData), &addRuleResults)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return false, err
 	}
 
 	return addRuleResults.Success, nil
@@ -943,48 +1161,92 @@ func (player Player) getStats() (map[string]int, error) {
 	var stats Stats
 	err = json.Unmarshal([]byte(netData), &stats)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return make(map[string]int), err
 	}
 
 	return stats.Stats, nil
 }
 
 // Prints game details during a player's turn.
-func printTurn(player Player, adjustedPlayerNumber int, turnTopCard string, message string) {
+func printTurn(player Player, adjustedPlayerNumber int, turnTopCard string, message string) error {
 	extraLines := 8
 	if message != "" {
 		extraLines += 2
 	}
-	printHeader([]string{}, extraLines)
-
-	terminalWidth, _ := getTerminalDimensions()
-	if adjustedPlayerNumber-1 == player.PlayerNumber {
-		fmt.Println(centeredText("YOUR TURN", 0))
-	} else {
-		fmt.Println(centeredText(fmt.Sprintf("Player %d's turn", adjustedPlayerNumber), 0))
+	err := printHeader([]string{}, extraLines)
+	if err != nil {
+		return err
 	}
+
+	terminalWidth, _, err := getTerminalDimensions()
+	if err != nil {
+		return err
+	}
+
+	var turnText string
+	if adjustedPlayerNumber-1 == player.PlayerNumber {
+		turnText = "YOUR TURN"
+	} else {
+		turnText = fmt.Sprintf("Player %d's turn", adjustedPlayerNumber)
+	}
+
+	centeredTurn, err := centeredText(turnText, 0)
+	if err != nil {
+		return err
+	}
+	fmt.Println(centeredTurn)
 	fmt.Println(strings.Repeat("─", terminalWidth))
-	fmt.Println(centeredText("Current Card:", 0))
-	fmt.Println(centeredText(turnTopCard, 0))
-	fmt.Println(centeredText("Your Hand:", 0))
-	fmt.Println(centeredText(player.Hand, 0))
+
+	centeredCardBanner, err := centeredText("Current Card:", 0)
+	if err != nil {
+		return err
+	}
+	fmt.Println(centeredCardBanner)
+
+	centeredCard, err := centeredText(turnTopCard, 0)
+	if err != nil {
+		return err
+	}
+	fmt.Println(centeredCard)
+
+	centeredHandBanner, err := centeredText("Your Hand:", 0)
+	if err != nil {
+		return err
+	}
+	fmt.Println(centeredHandBanner)
+
+	centeredHand, err := centeredText(player.Hand, 0)
+	if err != nil {
+		return err
+	}
+	fmt.Println(centeredHand)
 	fmt.Println(strings.Repeat("─", terminalWidth))
 
 	if message != "" {
-		fmt.Println(centeredText(message, 0))
+		centeredMessage, err := centeredText(message, 0)
+		if err != nil {
+			return err
+		}
+
+		fmt.Println(centeredMessage)
 		fmt.Println(strings.Repeat("─", terminalWidth))
 	}
+
+	return nil
 }
 
 // Prints player win count stats.
-func printStats(stats map[string]int) {
-	terminalWidth, _ := getTerminalDimensions()
+func printStats(stats map[string]int) error {
+	terminalWidth, _, err := getTerminalDimensions()
+	if err != nil {
+		return err
+	}
+
 	var sortedStats []string
 	for playerNumber, numWins := range stats {
 		intPlayerNumber, err := strconv.Atoi(playerNumber)
 		if err != nil {
-			panic(err)
+			return err
 		}
 
 		var winText string
@@ -994,7 +1256,12 @@ func printStats(stats map[string]int) {
 			winText = "wins"
 		}
 
-		sortedStats = append(sortedStats, centeredText(fmt.Sprintf("Player %d - %d %s", intPlayerNumber+1, numWins, winText), 0))
+		centeredStat, err := centeredText(fmt.Sprintf("Player %d - %d %s", intPlayerNumber+1, numWins, winText), 0)
+		if err != nil {
+			return err
+		}
+
+		sortedStats = append(sortedStats, centeredStat)
 	}
 
 	sort.Strings(sortedStats)
@@ -1002,41 +1269,36 @@ func printStats(stats map[string]int) {
 		fmt.Println(stat)
 	}
 	fmt.Println(strings.Repeat("─", terminalWidth))
+
+	return nil
 }
 
-// The main driver of the program and gameplay loop.
-func main() {
-	var player Player
+func runClient(player *Player) error {
 	var menuMessage string
-
-	// A goroutine for user interrupts. If one occurs, has the player leave the room before exiting.
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	go func() {
-		for sig := range c {
-			if sig.String() == "interrupt" {
-				_ = player.leaveRoom()
-				os.Exit(0)
-			}
-		}
-	}()
 
 	// Begin application loop.
 	for {
 		// If a server IP has not been selected, prompot the user for one.
 		if server.IP == "" {
-			chooseServer()
+			err := chooseServer()
+			if err != nil {
+				return err
+			}
 		}
 
 		// If the user chose to exit, quit the program.
 		if slices.Contains([]string{"exit", "EXIT", "e", "E"}, server.IP) {
-			return
+			return nil
 		}
 
 		// Presents the user with the main menu.
-		printMainMenu(menuMessage)
+		err := printMainMenu(menuMessage)
+		if err != nil {
+			return err
+		}
+
 		menuMessage = ""
-		continueGame, err := mainMenu(&player)
+		continueGame, err := mainMenu(player)
 		if err != nil {
 			server.Message = "Lost connection to server."
 			server.IP = ""
@@ -1049,7 +1311,7 @@ func main() {
 
 		// Presents the game start waiting screen.
 		// If the user created the room, prompts user to start the game. Otherwise, the player waits.
-		gameStarted, err := beginGame(&player)
+		gameStarted, err := beginGame(player)
 		if err != nil {
 			server.Message = "Lost connection to server."
 			server.IP = ""
@@ -1073,7 +1335,7 @@ func main() {
 
 			// If it is the player's turn, play a card.
 			if player.PlayerNumber == turnPlayerNumber {
-				leaveGame, wonRound, winner, round, stats, err := playTurn(&player, turnPlayerNumber, turnTopCard, gameMessage)
+				leaveGame, wonRound, winner, round, stats, err := playTurn(player, turnPlayerNumber, turnTopCard, gameMessage)
 				gameMessage = ""
 				if err != nil {
 					server.LostConnection = true
@@ -1084,14 +1346,18 @@ func main() {
 
 				// If a game winner has been announced by the server, present the end screen.
 				if winner != -1 {
-					endScreen(player, winner, stats)
+					err = endScreen(*player, winner, stats)
+					if err != nil {
+						return err
+					}
+
 					break
 				}
 
 				// If a round winner has been announced by the server, show the round winner screen and rule prompt.
 				// It is assumed this player has won the round given they played the last card.
 				if wonRound {
-					leaveGame, gameMessage, err = winnerScreen(&player, round)
+					leaveGame, gameMessage, err = winnerScreen(player, round)
 					if err != nil {
 						server.LostConnection = true
 						break
@@ -1102,7 +1368,10 @@ func main() {
 
 			} else {
 				// Print the turn waiting screen.
-				waitingScreen(player, turnPlayerNumber, turnTopCard, gameMessage)
+				err = waitingScreen(*player, turnPlayerNumber, turnTopCard, gameMessage)
+				if err != nil {
+					return err
+				}
 
 				// If it is not the player's turn, wait for the next turn.
 				wonRound, roundWinner, winner, round, stats, err := player.waitTurn()
@@ -1113,14 +1382,17 @@ func main() {
 
 				// If a game winner has been announced by the server, present the end screen.
 				if winner != -1 {
-					endScreen(player, winner, stats)
+					err = endScreen(*player, winner, stats)
+					if err != nil {
+						return err
+					}
 					break
 				}
 
 				// If a round winner has been announced by the server, show the round loser screen and waiting message.
 				// It is assumed this player has lost the round given they did not play the last card.
 				if wonRound {
-					err := loserScreen(&player, roundWinner, round)
+					err := loserScreen(player, roundWinner, round)
 					if err != nil {
 						server.LostConnection = true
 						break
@@ -1134,5 +1406,26 @@ func main() {
 			server.Message = "Lost connection to server."
 			server.IP = ""
 		}
+	}
+}
+
+func main() {
+	var player Player
+
+	// A goroutine for user interrupts. If one occurs, has the player leave the room before exiting.
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		for sig := range c {
+			if sig.String() == "interrupt" {
+				_ = player.leaveRoom()
+				os.Exit(0)
+			}
+		}
+	}()
+
+	err := runClient(&player)
+	if err != nil {
+		panic(err)
 	}
 }
