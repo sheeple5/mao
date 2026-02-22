@@ -34,7 +34,10 @@ type Server struct {
 }
 
 // Server is a global variable to avoid having to pass it in every function.
-var server Server
+var (
+	server     Server
+	ErrLostCon = errors.New("lost connection")
+)
 
 // Helper function to request and return user input
 func input(text string) (string, error) {
@@ -81,7 +84,7 @@ func centeredText(text string, offset int) (string, error) {
 func sendData(payload string) (string, error) {
 	conn, err := net.Dial("tcp", fmt.Sprintf("%s:9090", server.IP))
 	if err != nil {
-		return "", errors.New("lost connection")
+		return "", ErrLostCon
 	}
 
 	defer func() {
@@ -93,17 +96,17 @@ func sendData(payload string) (string, error) {
 	writer := bufio.NewWriter(conn)
 	_, err = writer.WriteString(payload)
 	if err != nil {
-		return "", errors.New("failed to write playload")
+		return "", ErrLostCon
 	}
 
 	err = writer.Flush()
 	if err != nil {
-		return "", errors.New("failed to flush writer")
+		return "", ErrLostCon
 	}
 
 	netData, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		return "", errors.New("failed to read data")
+		return "", ErrLostCon
 	}
 
 	return netData, nil
@@ -121,7 +124,7 @@ func chooseServer() error {
 		if err != nil {
 			return err
 		}
-		if slices.Contains([]string{"exit", "EXIT", "e", "E"}, server.IP) {
+		if slices.Contains([]string{"exit", "EXIT", "e", "E"}, serverIP) {
 			// If exit is chosen, return. In main, server.IP is checked for exit to quit the program.
 			server.IP = serverIP
 			return nil
@@ -1299,9 +1302,11 @@ func runClient(player *Player) error {
 
 		menuMessage = ""
 		continueGame, err := mainMenu(player)
-		if err != nil {
+		if err != nil && errors.Is(err, ErrLostCon) {
 			server.Message = "Lost connection to server."
 			server.IP = ""
+		} else if err != nil {
+			return err
 		}
 
 		// If the user chose not to create or join a room, returns back to the server selection screen.
@@ -1312,9 +1317,11 @@ func runClient(player *Player) error {
 		// Presents the game start waiting screen.
 		// If the user created the room, prompts user to start the game. Otherwise, the player waits.
 		gameStarted, err := beginGame(player)
-		if err != nil {
+		if err != nil && errors.Is(err, ErrLostCon) {
 			server.Message = "Lost connection to server."
 			server.IP = ""
+		} else if err != nil {
+			return err
 		}
 
 		// If the who created the room canceled the game, returns back to the main menu.
@@ -1328,18 +1335,22 @@ func runClient(player *Player) error {
 		for {
 			// The client requests whose turn it is.
 			turnPlayerNumber, turnTopCard, err := player.requestTurn()
-			if err != nil {
+			if err != nil && errors.Is(err, ErrLostCon) {
 				server.LostConnection = true
 				break
+			} else if err != nil {
+				return err
 			}
 
 			// If it is the player's turn, play a card.
 			if player.PlayerNumber == turnPlayerNumber {
 				leaveGame, wonRound, winner, round, stats, err := playTurn(player, turnPlayerNumber, turnTopCard, gameMessage)
 				gameMessage = ""
-				if err != nil {
+				if err != nil && errors.Is(err, ErrLostCon) {
 					server.LostConnection = true
 					break
+				} else if err != nil {
+					return err
 				} else if leaveGame {
 					break
 				}
@@ -1358,9 +1369,11 @@ func runClient(player *Player) error {
 				// It is assumed this player has won the round given they played the last card.
 				if wonRound {
 					leaveGame, gameMessage, err = winnerScreen(player, round)
-					if err != nil {
+					if err != nil && errors.Is(err, ErrLostCon) {
 						server.LostConnection = true
 						break
+					} else if err != nil {
+						return err
 					} else if leaveGame {
 						break
 					}
@@ -1375,15 +1388,19 @@ func runClient(player *Player) error {
 
 				// If it is not the player's turn, wait for the next turn.
 				wonRound, roundWinner, winner, round, stats, err := player.waitTurn()
-				if err != nil {
+				if err != nil && errors.Is(err, ErrLostCon) {
 					server.LostConnection = true
 					break
+				} else if err != nil {
+					return err
 				}
 
 				// If a game winner has been announced by the server, present the end screen.
 				if winner != -1 {
 					err = endScreen(*player, winner, stats)
-					if err != nil {
+					if err != nil && errors.Is(err, ErrLostCon) {
+						return err
+					} else if err != nil {
 						return err
 					}
 					break
@@ -1393,9 +1410,11 @@ func runClient(player *Player) error {
 				// It is assumed this player has lost the round given they did not play the last card.
 				if wonRound {
 					err := loserScreen(player, roundWinner, round)
-					if err != nil {
+					if err != nil && errors.Is(err, ErrLostCon) {
 						server.LostConnection = true
 						break
+					} else if err != nil {
+						return err
 					}
 				}
 			}
