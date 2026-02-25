@@ -3,16 +3,17 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -20,8 +21,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 )
@@ -125,28 +128,28 @@ type ActionDetails struct {
 }
 
 // Generic function for sending data back to the client.
-func sendData(conn net.Conn, payload []byte) {
+func sendData(conn net.Conn, payload []byte) error {
 	_, err := conn.Write(payload)
 	if err != nil {
-		panic(err)
+		return err
 	}
+	return nil
 }
 
 // Generic function for receiving data from the client, organizing the value into an "ActionDetails" struct.
-func receiveData(conn net.Conn) ActionDetails {
+func receiveData(conn net.Conn) (ActionDetails, error) {
 	netData, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		panic(err)
+		return ActionDetails{}, err
 	}
 
 	var actionDetails ActionDetails
 	err = json.Unmarshal([]byte(netData), &actionDetails)
 	if err != nil {
-		fmt.Println(netData)
-		panic(err)
+		return ActionDetails{}, err
 	}
 
-	return actionDetails
+	return actionDetails, nil
 }
 
 func (card Card) getValue() string {
@@ -161,29 +164,29 @@ func convertCard(playedCard string) Card {
 // Receives a played card and room as input, and determines if the played card passes the rules.
 // Rules are stored in a text file denoted by the room code. This is because rules need to be modified
 // by GPT at runtime, updating the rules file. The rules file is then interpreted and executed at runtime by yaegi.
-func rulesCheck(player Player, playedCard string, room *Room) bool {
+func rulesCheck(player Player, playedCard string, room *Room) (bool, error) {
 	// Check if card is actually in hand. If not, fails the rules check.
 	if !slices.Contains(player.Hand, convertCard(playedCard)) {
-		return false
+		return false, nil
 	}
 
 	// Instantiates a new yaegi interpreter.
 	interpreter := interp.New(interp.Options{})
 	err := interpreter.Use(stdlib.Symbols)
 	if err != nil {
-		panic(err)
+		return false, err
 	}
 
 	// Loads the rules text into the interpreter.
 	_, err = interpreter.Eval(string(room.Rules))
 	if err != nil {
-		panic(err)
+		return false, err
 	}
 
 	// Takes the rules.checkRules function in the rules text and passes it to the converter.
 	converter, err := interpreter.Eval("rules.checkRules")
 	if err != nil {
-		panic(err)
+		return false, err
 	}
 
 	// Uses the converter as an interface to create a new executable function to check the rules.
@@ -191,35 +194,34 @@ func rulesCheck(player Player, playedCard string, room *Room) bool {
 
 	// Returns the value of the loaded rules check, passing the needed played card and decks as strings so the interpreted text
 	// can convert them back into objects in its own scope.
-	return rulesCheck(playedCard, room.Deck.listCards("pile"), room.Deck.listCards("discard"))
+	return rulesCheck(playedCard, room.Deck.listCards("pile"), room.Deck.listCards("discard")), nil
 }
 
 // Reads the rules file content respective to the room code of the room.
-func (room *Room) retrieveRules() {
+func (room *Room) retrieveRules() error {
 	content, err := os.ReadFile(fmt.Sprintf("rules/rules_%s.txt", room.RoomCode))
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	room.Rules = string(content)
+	return nil
 }
 
 // When a new room is created, copies the rules_template.txt file into one specifically for that room.
-func (room *Room) copyRules() {
+func (room *Room) copyRules() error {
 	fileName := fmt.Sprintf("rules/rules_%s.txt", room.RoomCode)
 	sourceFile, err := os.Open("rules/rules_template.txt")
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer func() {
-		if closeErr := sourceFile.Close(); closeErr != nil {
-			panic(closeErr)
-		}
+		_ = sourceFile.Close()
 	}()
 
 	// Creates a temporary file.
 	tempFile, err := os.CreateTemp(filepath.Dir(fileName), fmt.Sprintf(".rules_%s-*.tmp", room.RoomCode))
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	tempName := tempFile.Name()
@@ -234,21 +236,22 @@ func (room *Room) copyRules() {
 	if err != nil {
 		closeErr := tempFile.Close()
 		if closeErr != nil {
-			panic(closeErr)
+			return err
 		}
-		panic(err)
+		return err
 	}
 
 	closeErr := tempFile.Close()
 	if closeErr != nil {
-		panic(closeErr)
+		return err
 	}
 
 	// Atomic rename the temporary file onto the original rules file.
 	err = os.Rename(tempName, fileName)
 	if err != nil {
-		panic(err)
+		return err
 	}
+	return nil
 }
 
 // Generates a random four digit room code.
@@ -359,7 +362,7 @@ func shuffleCards(pile []Card) {
 
 // When passed the description of a rule as text, queries ChatGPT 5.2 to generate the new rule as code.
 // This code is then appended to the rules file for the associated room.
-func (room *Room) addRule(newRule string) bool {
+func (room *Room) addRule(newRule string) (bool, error) {
 	// Defined structs to parse the response from ChatGPT.
 	type Content struct {
 		Text string
@@ -388,7 +391,7 @@ func (room *Room) addRule(newRule string) bool {
 	// Converts the request data into json.
 	jsonBody, err := json.Marshal(requestData)
 	if err != nil {
-		log.Fatal(err)
+		return false, err
 	}
 
 	// Instantiates an HTTP request object using OpenAI's responses API, passing our data as the body in the POST request.
@@ -396,7 +399,7 @@ func (room *Room) addRule(newRule string) bool {
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
-		panic(err)
+		return false, err
 	}
 
 	// Sets the Authorization header to our OpenAI token as a bearer token for authorization/authentication.
@@ -405,19 +408,17 @@ func (room *Room) addRule(newRule string) bool {
 	// Sends the request to OpenAI's API.
 	resp, err := client.Do(req)
 	if err != nil {
-		panic(err)
+		return false, err
 	}
 
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			panic(err)
-		}
+		_ = resp.Body.Close()
 	}()
 
 	// Retrieves ChatGPT's response and converts it to a string.
 	body, err := io.ReadAll((resp.Body))
 	if err != nil {
-		panic(err)
+		return false, err
 	}
 	stringBody := string(body)
 
@@ -425,26 +426,29 @@ func (room *Room) addRule(newRule string) bool {
 	var gptResponse GPTResponseObject
 	err = json.Unmarshal([]byte(stringBody), &gptResponse)
 	if err != nil {
-		fmt.Println(stringBody)
-		panic(err)
+		return false, err
 	}
 
 	// If ChatGPT determined that the requested rule could not be generated (as defined in the system prompt), returns false.
 	// Else, append rule to corresponding file and add function name to rules list.
 	if gptResponse.Output[0].Content[0].Text == "Can not generate" {
-		return false
+		return false, nil
 	} else {
-		room.updateRules(gptResponse.Output[0].Content[0].Text)
-		return true
+		err = room.updateRules(gptResponse.Output[0].Content[0].Text)
+		if err != nil {
+			return false, err
+		}
+
+		return true, nil
 	}
 }
 
 // Updates the given room's rules file with the new rule generated by GPT.
-func (room *Room) updateRules(newRule string) {
+func (room *Room) updateRules(newRule string) error {
 	fileName := fmt.Sprintf("rules/rules_%s.txt", room.RoomCode)
 	currentRulesBytes, err := os.ReadFile(fileName)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// There is a slice in the rules file that holds each function name in a slice. This retrieves that slice definition.
@@ -462,7 +466,7 @@ func (room *Room) updateRules(newRule string) {
 	// Creates a temporary file.
 	tempFile, err := os.CreateTemp(filepath.Dir(fileName), fmt.Sprintf(".rules_%s-*.tmp", room.RoomCode))
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	tempName := tempFile.Name()
@@ -478,20 +482,21 @@ func (room *Room) updateRules(newRule string) {
 	if err != nil {
 		closeErr := tempFile.Close()
 		if closeErr != nil {
-			panic(closeErr)
+			return err
 		}
-		panic(err)
+		return err
 	}
 	closeErr := tempFile.Close()
 	if closeErr != nil {
-		panic(closeErr)
+		return err
 	}
 
 	// Atomic rename the temporary file onto the original rules file.
 	err = os.Rename(tempName, fileName)
 	if err != nil {
-		panic(err)
+		return err
 	}
+	return nil
 }
 
 // Gets the player who won the game. If there is a tie, throws an error.
@@ -518,7 +523,7 @@ func (room *Room) getWinningPlayer() (Player, error) {
 }
 
 // Removes the passed player from the requested room.
-func leaveRoom(rooms map[string]*Room, room *Room, player Player) {
+func leaveRoom(rooms map[string]*Room, room *Room, player Player) error {
 	// If it is currently the turn of the leaving player, pass the turn to the next player.
 	room.Cond.L.Lock()
 	if player.PlayerNumber == room.PlayerTurn {
@@ -534,11 +539,15 @@ func leaveRoom(rooms map[string]*Room, room *Room, player Player) {
 
 		room.GameStarted = true
 		room.RoundStarted = true
-		deleteRoom(rooms, room)
+
+		err := deleteRoom(rooms, room)
+		if err != nil {
+			return err
+		}
 
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
-		return
+		return nil
 	} else if !room.RoundStarted && player.CanStartGame {
 		room.RoundStarted = true
 	}
@@ -549,17 +558,22 @@ func leaveRoom(rooms map[string]*Room, room *Room, player Player) {
 
 	// If the leaving player is the last in the room, deletes the entire room.
 	if len(room.Players) == 0 {
-		deleteRoom(rooms, room)
+		err := deleteRoom(rooms, room)
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // Deletes the room from the map of rooms by deleting its rules file along with its entry in the map.
-func deleteRoom(rooms map[string]*Room, room *Room) {
+func deleteRoom(rooms map[string]*Room, room *Room) error {
 	err := os.Remove(fmt.Sprintf("rules/rules_%s.txt", room.RoomCode))
 	if err != nil {
-		panic(err)
+		return err
 	}
 	delete(rooms, room.RoomCode)
+	return nil
 }
 
 // Gets the room given a room code. Throws an error if it does not exist.
@@ -592,8 +606,11 @@ func getNextTurn(room *Room) int {
 	return playerNumbers[playerPosition]
 }
 
-// The main driver of the program and manages client connections.
-func main() {
+func runServer() error {
+	// Instantiating connection and error channels.
+	connCh := make(chan net.Conn)
+	errCh := make(chan error)
+
 	// If the user has not set their OpenAI API token, exit.
 	if openAIToken == "" {
 		fmt.Println("Please set your OpenAI token.")
@@ -606,48 +623,82 @@ func main() {
 	// Sets up a listener on port 9090 to receive game data requests from the clients.
 	listener, err := net.Listen("tcp", ":9090")
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer func() {
-		if closeErr := listener.Close(); closeErr != nil {
-			panic(closeErr)
-		}
+		_ = listener.Close()
 	}()
 	fmt.Println("Listening on all interfaces on port 9090")
 
+	// Instantiates a new context for handling SIGINT and SIGTERM.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	// Infinite loop to receive incoming client connections.
 	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			panic(err)
-		}
+		go func() {
+			conn, err := listener.Accept()
+			if err != nil {
+				errCh <- err
+			}
+			connCh <- conn
+		}()
 
-		go handleConnection(conn, rooms)
+		select {
+		case <-ctx.Done():
+			log.Info().Msg("Intercepted SIGINT or SIGTERM, exiting")
+			return nil
+		case err := <-errCh:
+			return err
+		case conn := <-connCh:
+			go handleConnection(conn, rooms, errCh)
+		}
 	}
 }
 
-// Handles client connections and performs actions based on the requested action from the client.
-func handleConnection(conn net.Conn, rooms map[string]*Room) {
+// The main driver of the program and manages client connections.
+func main() {
+	if err := runServer(); err != nil && !errors.Is(err, context.Canceled) {
+		log.Panic().Err(err).Msg("")
+	}
 	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			panic(closeErr)
-		}
+		_ = cleanupFiles()
+	}()
+}
+
+// Handles client connections and performs actions based on the requested action from the client.
+func handleConnection(conn net.Conn, rooms map[string]*Room, errCh chan error) {
+	defer func() {
+		_ = conn.Close()
 	}()
 
 	// Receives the client's data and converts it into a struct.
 	// The requested action determines what the server does with the sent data.
-	actionDetails := receiveData(conn)
+	actionDetails, err := receiveData(conn)
+	if err != nil {
+		errCh <- err
+		return
+	}
+
 	switch actionDetails.Action {
 
 	// Simple health check action to see if the service is up.
 	case "healthCheck":
-		sendData(conn, []byte("{\"service\": \"Mao Game\", \"success\": true}\n"))
+		err := sendData(conn, []byte("{\"service\": \"Mao Game\", \"success\": true}\n"))
+		if err != nil {
+			errCh <- err
+			return
+		}
 
 	// Gets the current game standings and sends the client each player's number of wins given a room code.
 	case "getStats":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"getStats\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"getStats\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
@@ -655,19 +706,31 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		for _, player := range room.Players {
 			playerStats = append(playerStats, fmt.Sprintf("\"%d\": %d", player.PlayerNumber, player.Wins))
 		}
-		sendData(conn, fmt.Appendf(nil, "{\"stats\": {%s}}\n", strings.Join(playerStats, ", ")))
+		err = sendData(conn, fmt.Appendf(nil, "{\"stats\": {%s}}\n", strings.Join(playerStats, ", ")))
+		if err != nil {
+			errCh <- err
+			return
+		}
 
 	// Creates a room based on the settings the client has sent the server. It also creates a new player and sends the player data back to the client.
 	case "createRoom":
 		// If the client tries to create a room with too many or too few cards as the initial hand size, rejects the creation of the room.
 		if actionDetails.HandSize < 1 || actionDetails.HandSize > 15 {
-			sendData(conn, []byte("{\"action\": \"createRoom\", \"success\": false, \"message\": \"Specified handsize not between 1 and 15.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"createRoom\", \"success\": false, \"message\": \"Specified handsize not between 1 and 15.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
 		// If the client tries to create a room with too many or too few rounds, rejects the creation of the room.
 		if actionDetails.NumRounds < 1 || actionDetails.NumRounds > 10 {
-			sendData(conn, []byte("{\"action\": \"createRoom\", \"success\": false, \"message\": \"Specified number of rounds not between 1 and 10.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"createRoom\", \"success\": false, \"message\": \"Specified number of rounds not between 1 and 10.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
@@ -684,17 +747,34 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		rooms[roomCode] = &newRoom
 
 		// Copies the rules template into a new file for the newly created room and loads the string into the room object.
-		newRoom.copyRules()
-		newRoom.retrieveRules()
+		err = newRoom.copyRules()
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		err = newRoom.retrieveRules()
+		if err != nil {
+			errCh <- err
+			return
+		}
 
 		// Sends the player data back to the client.
-		sendData(conn, fmt.Appendf(nil, "{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s, \"roomCode\": \"%s\"}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame), newRoom.RoomCode))
+		err := sendData(conn, fmt.Appendf(nil, "{\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s, \"roomCode\": \"%s\"}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame), newRoom.RoomCode))
+		if err != nil {
+			errCh <- err
+			return
+		}
 
 	// Creates a new player in the room if a client requsts to join.
 	case "joinRoom":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"joinRoom\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"joinRoom\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
@@ -704,28 +784,52 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 			room.Players[newPlayer.PlayerID] = &newPlayer
 
 			// Sends the player data back to the client.
-			sendData(conn, fmt.Appendf(nil, "{\"action\": \"joinRoom\", \"success\": true, \"player\": {\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s}}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame)))
+			err := sendData(conn, fmt.Appendf(nil, "{\"action\": \"joinRoom\", \"success\": true, \"player\": {\"playerID\": \"%s\", \"playerNumber\": %d, \"canStartGame\": %s}}\n", newPlayer.PlayerID, newPlayer.PlayerNumber, strconv.FormatBool(newPlayer.CanStartGame)))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		} else {
-			sendData(conn, []byte("{\"action\": \"joinRoom\", \"success\": false}\n"))
+			err := sendData(conn, []byte("{\"action\": \"joinRoom\", \"success\": false}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		}
 
 	// Removes a player from the room if they request to leave.
 	case "leaveRoom":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"leftRoom\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"leftRoom\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
 		player, err := getPlayer(room, actionDetails.PlayerID)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"leftRoom\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"leftRoom\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
-		leaveRoom(rooms, room, *player)
+		err = leaveRoom(rooms, room, *player)
+		if err != nil {
+			errCh <- err
+			return
+		}
 
-		sendData(conn, []byte("{\"action\": \"leftRoom\", \"success\": true}\n"))
+		err = sendData(conn, []byte("{\"action\": \"leftRoom\", \"success\": true}\n"))
+		if err != nil {
+			errCh <- err
+			return
+		}
 
 	// Gets the list of public rooms and sends it back to the client.
 	case "getRooms":
@@ -735,19 +839,31 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				roomCodes = append(roomCodes, roomCode)
 			}
 		}
-		sendData(conn, fmt.Appendf(nil, "{\"rooms\": \"%s\"}\n", strings.Join(roomCodes, " ")))
+		err := sendData(conn, fmt.Appendf(nil, "{\"rooms\": \"%s\"}\n", strings.Join(roomCodes, " ")))
+		if err != nil {
+			errCh <- err
+			return
+		}
 
 	// Holds a connection open for a client waiting for the game to start and returns their initial hand once it does.
 	case "waitStart":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"waitStart\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"waitStart\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
 		player, err := getPlayer(room, actionDetails.PlayerID)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"waitStart\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"waitStart\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
@@ -758,14 +874,22 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 			room, err := getRoom(rooms, actionDetails.RoomCode)
 			if err != nil {
-				sendData(conn, []byte("{\"action\": \"waitStart\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+				err := sendData(conn, []byte("{\"action\": \"waitStart\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+				if err != nil {
+					errCh <- err
+					return
+				}
 				return
 			}
 
 			// Draws the player's hand for the new game/round and sends it back to the client.
 			player.drawHand(room)
 			cardList := player.listCards()
-			sendData(conn, fmt.Appendf(nil, "{\"action\": \"waitStart\", \"success\": true, \"initialHand\": \"%s\"}\n", cardList))
+			err = sendData(conn, fmt.Appendf(nil, "{\"action\": \"waitStart\", \"success\": true, \"initialHand\": \"%s\"}\n", cardList))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		}
 
 		room.Cond.Signal()
@@ -775,13 +899,21 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 	case "startGame":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"startGame\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"startGame\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
 		player, err := getPlayer(room, actionDetails.PlayerID)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"startGame\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"startGame\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
@@ -793,9 +925,17 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 			player.drawHand(room)
 			cardList := player.listCards()
-			sendData(conn, fmt.Appendf(nil, "{\"action\": \"startGame\", \"success\": true, \"initialHand\": \"%s\"}\n", cardList))
+			err := sendData(conn, fmt.Appendf(nil, "{\"action\": \"startGame\", \"success\": true, \"initialHand\": \"%s\"}\n", cardList))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		} else {
-			sendData(conn, []byte("{\"gameStarted\": \"false\", \"message\": \"Can not start game\"}\n"))
+			err := sendData(conn, []byte("{\"gameStarted\": \"false\", \"message\": \"Can not start game\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		}
 
 		room.Cond.Signal()
@@ -805,13 +945,21 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 	case "cancelGame":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
 		player, err := getPlayer(room, actionDetails.PlayerID)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
@@ -819,10 +967,24 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		if player.CanStartGame && !room.GameStarted {
 			room.GameStarted = true
 			room.RoundStarted = true
-			deleteRoom(rooms, room)
-			sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": true}\n"))
+
+			err := deleteRoom(rooms, room)
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			err = sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": true}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		} else {
-			sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": false, \"message\": \"Player did not create room.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"cancelGame\", \"success\": false, \"message\": \"Player did not create room.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		}
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
@@ -831,13 +993,21 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 	case "playCard":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"playCard\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"playCard\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
 		player, err := getPlayer(room, actionDetails.PlayerID)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"playCard\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"playCard\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
@@ -851,9 +1021,25 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				player.drawCard(&room.Deck)
 
 				cardList := player.listCards()
-				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
+				err := sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
+				if err != nil {
+					errCh <- err
+					return
+				}
 				room.PlayerTurn = getNextTurn(room)
-			} else if rulesCheck(*player, playedCard, room) {
+
+				room.Cond.Signal()
+				room.Cond.L.Unlock()
+				return
+			}
+
+			rulesPassed, err := rulesCheck(*player, playedCard, room)
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			if rulesPassed {
 				// If the player played a card that passed the rules of the room, pop the card from the player's hand, along with updating the deck's discard pile.
 				popIndex := slices.Index(player.Hand, convertCard(playedCard))
 
@@ -863,7 +1049,11 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				// If the player still has cards in their hand, send the updated hand back to the client.
 				cardList := player.listCards()
 				if len(player.Hand) > 0 {
-					sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
+					err := sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
+					if err != nil {
+						errCh <- err
+						return
+					}
 				} else {
 					// If the player has no cards in hand, then they won the round. Initialize a new deck for the next round and set other room states.
 					player.Wins += 1
@@ -883,14 +1073,22 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 
 					// If there are more rounds to be played, respond to the client that they won the round, but without a game winner.
 					if room.Round < room.RoundCount {
-						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": -1}\n", room.Round, cardList))
+						err := sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": -1}\n", room.Round, cardList))
+						if err != nil {
+							errCh <- err
+							return
+						}
 					} else {
 						// If there are no more rounds to be played, get the winning player.
 						winningPlayer, err := room.getWinningPlayer()
 						if err != nil {
 							// If there is an error, it means that there was a tie. The game goes to an overtime round and continues like normal.
 							room.RoundCount += 1
-							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": -1}\n", room.Round, cardList))
+							err := sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": -1}\n", room.Round, cardList))
+							if err != nil {
+								errCh <- err
+								return
+							}
 						} else {
 							// If here is no tie, then the server responds to the client with the final stats along with the winner.
 							var playerStats []string
@@ -898,8 +1096,17 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 								playerStats = append(playerStats, fmt.Sprintf("\"%d\": %d", player.PlayerNumber, player.Wins))
 							}
 
-							deleteRoom(rooms, room)
-							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": %d, \"stats\": {%s}}\n", room.Round, cardList, winningPlayer.PlayerNumber, strings.Join(playerStats, ", ")))
+							err := deleteRoom(rooms, room)
+							if err != nil {
+								errCh <- err
+								return
+							}
+
+							err = sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": true, \"currentHand\": \"%s\", \"wonRound\": true, \"winner\": %d, \"stats\": {%s}}\n", room.Round, cardList, winningPlayer.PlayerNumber, strings.Join(playerStats, ", ")))
+							if err != nil {
+								errCh <- err
+								return
+							}
 						}
 					}
 				}
@@ -910,11 +1117,19 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				player.drawCard(&room.Deck)
 
 				cardList := player.listCards()
-				sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": false, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
+				err := sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"rulesPassed\": false, \"currentHand\": \"%s\", \"wonRound\": false, \"winner\": -1}\n", room.Round, cardList))
+				if err != nil {
+					errCh <- err
+					return
+				}
 			}
 		} else {
 			// Responds with a failure if a player tried to play when it wasn't there turn.
-			sendData(conn, []byte("{\"playCard\": \"false\", \"message\": \"It is not this player's turn\"}\n"))
+			err := sendData(conn, []byte("{\"playCard\": \"false\", \"message\": \"It is not this player's turn\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		}
 
 		room.Cond.Signal()
@@ -924,17 +1139,29 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 	case "requestTurn":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"requestTurn\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"requestTurn\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
-		sendData(conn, fmt.Appendf(nil, "{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().getValue()))
+		err = sendData(conn, fmt.Appendf(nil, "{\"playerNumber\": %d, \"topCard\": \"%s\"}\n", room.PlayerTurn, room.Deck.getCurrentTop().getValue()))
+		if err != nil {
+			errCh <- err
+			return
+		}
 
 	// Holds a connection open for a client waiting for the current player to play their turn. Sends game state data when they finish.
 	case "waitTurn":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"waitTurn\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"waitTurn\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
@@ -951,7 +1178,11 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 				if len(player.Hand) == 0 {
 					// If there are more rounds to be played, respond to the client that the last player won the round, but without a game winner.
 					if room.Round < room.RoundCount {
-						sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": -1}\n", room.Round, currentPlayer+1))
+						err := sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": -1}\n", room.Round, currentPlayer+1))
+						if err != nil {
+							errCh <- err
+							return
+						}
 					} else {
 						// If there are no more rounds to be played, get the winning player.
 						winningPlayer, err := room.getWinningPlayer()
@@ -963,10 +1194,18 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 						// If there is an error, it means that there was a tie. The game goes to an overtime round and continues like normal.
 						// Doesn't increase round count here because playCard block handles it.
 						if err != nil {
-							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": -1}\n", room.Round, currentPlayer+1))
+							err := sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": -1}\n", room.Round, currentPlayer+1))
+							if err != nil {
+								errCh <- err
+								return
+							}
 						} else {
 							// If here is no tie, then the server responds to the client with the final stats along with the winner.
-							sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": %d, \"stats\": {%s}}\n", room.Round, currentPlayer+1, winningPlayer.PlayerNumber, strings.Join(playerStats, ", ")))
+							err := sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": true, \"winningRoundPlayer\": %d, \"winningGamePlayer\": %d, \"stats\": {%s}}\n", room.Round, currentPlayer+1, winningPlayer.PlayerNumber, strings.Join(playerStats, ", ")))
+							if err != nil {
+								errCh <- err
+								return
+							}
 						}
 					}
 				}
@@ -977,19 +1216,31 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		room.Cond.Signal()
 		room.Cond.L.Unlock()
 
-		sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": false, \"winningGamePlayer\": -1}\n", room.Round))
+		err = sendData(conn, fmt.Appendf(nil, "{\"round\": %d, \"wonRound\": false, \"winningGamePlayer\": -1}\n", room.Round))
+		if err != nil {
+			errCh <- err
+			return
+		}
 
 	// Allows the client to add a rule to the room if they won the round.
 	case "addRule":
 		room, err := getRoom(rooms, actionDetails.RoomCode)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"addRule\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"addRule\", \"success\": false, \"message\": \"Room does not exist.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
 		player, err := getPlayer(room, actionDetails.PlayerID)
 		if err != nil {
-			sendData(conn, []byte("{\"action\": \"addRule\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			err := sendData(conn, []byte("{\"action\": \"addRule\", \"success\": false, \"message\": \"Player does not exist in this room.\"}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 			return
 		}
 
@@ -999,18 +1250,51 @@ func handleConnection(conn net.Conn, rooms map[string]*Room) {
 		// Also uses a room attribute to determine if a rule has been added yet this round. That way, multiple rules can't be added per won round.
 		if len(player.Hand) == 0 && room.CanAddRule {
 			room.CanAddRule = false
-			success := room.addRule(newRule)
+			success, err := room.addRule(newRule)
+			if err != nil {
+				errCh <- err
+				return
+			}
 
 			// If the rule was successfully added, reload the rule code text into the room's attribute.
 			if success {
-				room.retrieveRules()
+				err = room.retrieveRules()
+				if err != nil {
+					errCh <- err
+					return
+				}
 			}
 
-			sendData(conn, fmt.Appendf(nil, "{\"action\": \"addRule\", \"success\": %t}\n", success))
+			err = sendData(conn, fmt.Appendf(nil, "{\"action\": \"addRule\", \"success\": %t}\n", success))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		} else {
-			sendData(conn, []byte("{\"action\": \"addRule\", \"success\": false}\n"))
+			err := sendData(conn, []byte("{\"action\": \"addRule\", \"success\": false}\n"))
+			if err != nil {
+				errCh <- err
+				return
+			}
 		}
 	default:
 		fmt.Printf("Invalid request: %v\n", actionDetails)
 	}
+}
+
+func cleanupFiles() error {
+	files, err := os.ReadDir("./rules")
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		if file.Name() != "rules_template.txt" {
+			err := os.Remove(fmt.Sprintf("./rules/%s", file.Name()))
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/term"
 )
 
@@ -1445,6 +1446,6 @@ func main() {
 
 	err := runClient(&player)
 	if err != nil {
-		panic(err)
+		log.Panic().Err(err).Msg("")
 	}
 }
