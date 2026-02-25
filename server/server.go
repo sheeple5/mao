@@ -647,7 +647,7 @@ func runServer() error {
 		select {
 		case <-ctx.Done():
 			log.Info().Msg("Intercepted SIGINT or SIGTERM, exiting")
-			return nil
+			return ctx.Err()
 		case err := <-errCh:
 			return err
 		case conn := <-connCh:
@@ -658,12 +658,14 @@ func runServer() error {
 
 // The main driver of the program and manages client connections.
 func main() {
-	if err := runServer(); err != nil && !errors.Is(err, context.Canceled) {
-		log.Panic().Err(err).Msg("")
-	}
+	// Cleans up rules files when server terminates.
 	defer func() {
 		_ = cleanupFiles()
 	}()
+
+	if err := runServer(); err != nil && !errors.Is(err, context.Canceled) {
+		log.Panic().Err(err).Msg("")
+	}
 }
 
 // Handles client connections and performs actions based on the requested action from the client.
@@ -1282,6 +1284,7 @@ func handleConnection(conn net.Conn, rooms map[string]*Room, errCh chan error) {
 	}
 }
 
+// Cleans up any remaining room rules or temporary files on server termination.
 func cleanupFiles() error {
 	files, err := os.ReadDir("./rules")
 	if err != nil {
