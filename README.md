@@ -64,7 +64,17 @@ Finally, clone the repository with `git clone https://github.com/sheeple5/mao.gi
 There are a multitude of options for running the server. In order of most recommended to least, perform whatever option you choose in the root of the repository.
 
 #### Running in a Docker Container
-A `Dockerfile` and `Makefile` have been provided to make running the server in a container very simple. First, build the image with:
+A `docker-compose.yml` file has been provided to start the container with Docker Compose. To run the server, make sure you've set your 
+`OPENAI_TOKEN` variable and simply use:
+
+`docker compose up -d`
+
+To stop the container, use:
+
+`docker compose down`
+
+Or, manual image building and execution, a `Dockerfile` and `Makefile` have been provided as well to make the image and run the server via `docker run`.
+First, build the image with:
 
 `make build`
 
@@ -72,14 +82,18 @@ Then, assuming you have set your `OPENAI_TOKEN` variable, start the server in a 
 
 `make run_server`
 
-The container should have an exposed `9090` port that can be reached through `localhost`.
+To stop the container, use:
+
+`make stop`
+
+In either case, the container should have an exposed `9090` port that can be reached through `localhost`.
 
 #### Build server.go
 You can build `server.go` into a binary first before executing. To build directly, you can run:
 
 `go build -o mao_server server/server.go`
 
-Alternatively, you can use the Docker image to build the binary:
+Alternatively, you can use the Docker image to build the binary. To run using Docker Compose, run:
 
 `make build`
 
