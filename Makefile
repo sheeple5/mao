@@ -17,4 +17,3 @@ run_client:
 
 stop:
 	docker stop mao || true
-	docker rm mao || true
